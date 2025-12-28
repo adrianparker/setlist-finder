@@ -66,7 +66,10 @@ When calling APIs:
 ### Language & Testing
 - **Language**: JavaScript (Node.js)
 - **Testing Framework**: Mocha
-- **Code Style**: Professional, production-grade code with clear separation of concerns
+
+### Code Style Guidelines
+- Never use emojis in code comments or console output
+- Professional, production-grade code with clear separation of concerns
 
 ### Logging
 - **API Call Logging**: All API calls must be logged

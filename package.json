@@ -10,7 +10,8 @@
     "test:watch": "mocha --watch"
   },
   "dependencies": {
-    "commander": "^11.1.0"
+    "commander": "^11.1.0",
+    "dotenv": "^17.2.3"
   },
   "devDependencies": {
     "chai": "^6.2.2",

@@ -20,6 +20,37 @@ function prompt(rl, question) {
   });
 }
 
+async function getArtistMBID(rl, artistName) {
+  logger.info(`Setlist command: Searching for artist: ${artistName}`);
+  const result = await mbClient.searchArtist(artistName);
+
+  if (!result) {
+    console.log(`\n✗ No artist found matching "${artistName}"\n`);
+    logger.info(`No results found for artist: ${artistName}`);
+    return null;
+  }
+
+  console.log(`\n✓ Found artist: ${result.name}`);
+  console.log(`  MBID: ${result.mbid}\n`);
+  logger.info(`Successfully found artist MBID: ${result.mbid}`);
+
+  return result;
+}
+
+async function getLocation(rl) {
+  const location = await prompt(rl, 'Enter a location (optional): ');
+
+  if (location) {
+    console.log(`\n✓ Location: ${location}\n`);
+    logger.info(`Location provided: ${location}`);
+  } else {
+    console.log('\n✓ No location specified\n');
+    logger.info('No location provided');
+  }
+
+  return location;
+}
+
 export async function setlist() {
   const rl = createReadlineInterface();
 
@@ -32,17 +63,14 @@ export async function setlist() {
       return;
     }
 
-    logger.info(`Setlist command: Searching for artist: ${artistName}`);
-    const result = await mbClient.searchArtist(artistName);
+    const artist = await getArtistMBID(rl, artistName);
 
-    if (result) {
-      console.log(`\n✓ Found artist: ${result.name}`);
-      console.log(`  MBID: ${result.mbid}\n`);
-      logger.info(`Successfully found artist MBID: ${result.mbid}`);
-    } else {
-      console.log(`\n✗ No artist found matching "${artistName}"\n`);
-      logger.info(`No results found for artist: ${artistName}`);
+    if (!artist) {
+      rl.close();
+      return;
     }
+
+    await getLocation(rl);
   } catch (error) {
     logger.error(`Setlist command error: ${error.message}`);
     console.error(`\n✗ Error: ${error.message}\n`);
