@@ -75,6 +75,7 @@ function displaySetlists(data) {
     console.log(`   Venue: ${venueName}, ${city}, ${country}`);
     console.log(`   Setlist ID: ${setlist.id}\n`);
   });
+  return data.setlist[0].id;
 }
 
 export async function setlist() {
@@ -99,7 +100,26 @@ export async function setlist() {
     const location = await getLocation(rl);
 
     const setlistData = await searchSetlists(artist.mbid, location);
-    displaySetlists(setlistData);
+    const mostRecentMatchingSetlist = displaySetlists(setlistData);
+
+    if (mostRecentMatchingSetlist) {
+      console.log(`Most recent matching setlist ID: ${mostRecentMatchingSetlist}`);
+      try {
+        const setlistResponse = await setlistClient.getSetlist(mostRecentMatchingSetlist);
+
+        if (setlistResponse) {
+          console.log('\nSetlist content:\n');
+          console.log(JSON.stringify(setlistResponse, null, 2));
+          logger.info(`Fetched setlist details for ID: ${mostRecentMatchingSetlist}`);
+        } else {
+          console.log('\nNo setlist content returned from getSetlist\n');
+          logger.info(`No setlist content for ID: ${mostRecentMatchingSetlist}`);
+        }
+      } catch (err) {
+        logger.error(`Failed to fetch setlist details: ${err.message}`);
+        console.error(`\nError fetching setlist details: ${err.message}\n`);
+      }
+    }
 
     logger.info('Setlist search completed successfully');
   } catch (error) {

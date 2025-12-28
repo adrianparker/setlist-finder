@@ -28,7 +28,7 @@ export class Logger {
 
   log(level, message) {
     const logEntry = `[${this.getTimestamp()}] [${level}] ${message}`;
-    console.log(logEntry);
+    //console.log(logEntry);
     fs.appendFileSync(this.logFile, logEntry + '\n');
   }
 

@@ -32,4 +32,27 @@ export class SetlistFmClient {
 
     return response.json();
   }
+
+  async getSetlist(setlistId) {
+    if (!this.apiKey) {
+      throw new Error('SETLISTFM_API_KEY environment variable is not set');
+    }
+
+    const url = new URL(`${this.baseUrl}/setlist/${setlistId}`);
+
+    this.logger.info(`Fetching setlist ${setlistId} from Setlist.fm`);
+
+    const response = await fetch(url.toString(), {
+      headers: {
+        'x-api-key': this.apiKey,
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Setlist.fm API error: ${response.status} ${response.statusText}`);
+    }
+
+    return response.json();
+  }
 }
