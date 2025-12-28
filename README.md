@@ -4,11 +4,7 @@ A command-line application that finds a setlist.
 
 ## Features
 
-- Search for artists by name using the MusicBrainz API
-- Comprehensive logging of all API calls
-- Date-based log files stored in `logs/` directory
-- Professional CLI interface with Commander.js
-- Test coverage with Mocha
+Search for setlists by first finding the artist, then narrowing with city if known.
 
 ## Installation
 
@@ -23,15 +19,54 @@ cd setlist-finder
 npm install
 ```
 
+3. Copy the example environment file and add your Setlist.fm API key:
+
+```bash
+cp .env.example .env
+```
+
+Then open `.env` and set your API key, for example:
+
+```
+SETLISTFM_API_KEY=your_setlistfm_api_key_here
+```
+
 ## Usage
 
-### Search for an Artist
+### Search for a Setlist
+
+This is the key usage of the application.
+
+```bash
+npm start setlist
+```
+
+#### Example Output
+
+```bash
+$ npm start setlist
+
+Enter artist name: Anthrax
+Found artist: Anthrax
+  MBID: b616d6f0-ec1f-4c69-8a79-12a97ece7372
+
+Enter a location (optional): Wellington
+Found 1 setlist(s):
+
+1. 22-08-1990
+   Venue: Wellington Town Hall, Wellington, New Zealand
+   Setlist ID: 4bd11b46
+```
+
+### Search for an Artist MBID
+
+This function just finds the MusicBrainz ID for the artist that best natches your artist search term. Only useful for debugging.
 
 ```bash
 npm start search Portishead
 ```
 
-### Example Output
+#### Example Output
 
 ```bash
 $ npm start search Portishead
@@ -62,7 +97,7 @@ npm run test:watch
 
 ## Logging
 
-All API calls are logged to both console and local files:
+API calls are logged to local files:
 
 - **Location**: `logs/` directory
 - **Format**: `YYYY-MM-DD.log` (one file per day)
@@ -73,7 +108,24 @@ All API calls are logged to both console and local files:
 - **Runtime**: Node.js
 - **CLI Framework**: Commander.js
 - **Testing**: Mocha + Chai + Sinon
-- **API**: MusicBrainz Web API
+- **API**: MusicBrainz Web API and Setlist.fm Web API
+
+## Setlist.fm API
+
+This application uses the Setlist.fm Web API to find setlists for artists (by MusicBrainz artist MBID) and to retrieve setlist details.
+
+- Authentication: provide your API key in .env as SETLISTFM_API_KEY. Requests must include the x-api-key header and an Accept header for JSON:
+```text
+x-api-key: your_setlistfm_api_key_here
+Accept: application/json
+```
+- Common endpoints used:
+  - GET /rest/1.0/search/setlists — search setlists (accepts artistMbid and city query params)
+  - GET /rest/1.0/setlist/{setlistId} — get a single setlist's details
+- Notes:
+  - The app first resolves an artist to a MusicBrainz MBID, then queries Setlist.fm using that MBID and an optional location filter.
+  - Respect Setlist.fm rate limits and cache or log responses where appropriate (see Logging section).
+- Docs: https://api.setlist.fm/docs/1.0/index.html
 
 ## MusicBrainz API
 

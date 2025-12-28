@@ -67,6 +67,13 @@ When calling APIs:
 - **Language**: JavaScript (Node.js)
 - **Testing Framework**: Mocha
 
+#### Testing
+- All tests must use Mocha, Sinon, and Chai
+- Do not use Vitest or other testing frameworks
+- Use `sinon.stub()` for mocks and stubs
+- Use Chai assertions (`expect().to.equal()`, `expect().to.deep.equal()`, etc.)
+- Always clean up stubs in `afterEach()` hooks
+
 ### Code Style Guidelines
 - Never use emojis in code comments or console output
 - Professional, production-grade code with clear separation of concerns
