@@ -1,0 +1,22 @@
+{
+  "name": "setlist-finder",
+  "version": "1.0.0",
+  "description": "Finds a setlist.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "mocha",
+    "test:watch": "mocha --watch"
+  },
+  "dependencies": {
+    "commander": "^11.1.0"
+  },
+  "devDependencies": {
+    "chai": "^6.2.2",
+    "mocha": "^10.2.0",
+    "sinon": "^17.0.1"
+  },
+  "author": "Adrian Parker",
+  "license": "MIT"
+}
