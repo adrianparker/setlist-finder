@@ -7,17 +7,17 @@ export class SetlistFmClient {
     this.apiKey = process.env.SETLISTFM_API_KEY;
   }
   
-  async searchSetlistsByArtist(mbid, location = null) {
+  async searchSetlistsByArtist(mbid, city = null) {
     if (!this.apiKey) {
       throw new Error('SETLISTFM_API_KEY environment variable is not set');
     }
     const url = new URL(`${this.baseUrl}/search/setlists`);
     url.searchParams.append('artistMbid', mbid);
-    if (location) {
-      url.searchParams.append('cityName', location);
+    if (city) {
+      url.searchParams.append('cityName', city);
     }
 
-    this.logger.info(`Searching Setlist.fm for artist ${mbid}${location ? ` in ${location}` : ''}`);
+    this.logger.info(`Searching Setlist.fm for artist ${mbid}${city ? ` in ${city}` : ''}`);
     
     const response = await fetch(url.toString(), {
       headers: {

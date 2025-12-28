@@ -16,7 +16,7 @@ program
 
 program
   .command('setlist')
-  .description('Search with an artist, location, and date, then get a setlist')
+  .description('Search with an artist, city, and date, then get a setlist')
   .action(setlist);
 
 program.parse(process.argv);

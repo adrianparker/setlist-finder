@@ -50,7 +50,7 @@ Enter artist name: Anthrax
 Found artist: Anthrax
   MBID: b616d6f0-ec1f-4c69-8a79-12a97ece7372
 
-Enter a location (optional): Wellington
+Enter a city (optional): Wellington
 Found 1 setlist(s):
 
 1. 22-08-1990
@@ -99,7 +99,7 @@ npm run test:watch
 
 API calls are logged to local files:
 
-- **Location**: `logs/` directory
+- **City**: `logs/` directory
 - **Format**: `YYYY-MM-DD.log` (one file per day)
 - **Content**: Timestamps, log levels, and API request/response details
 
@@ -123,7 +123,7 @@ Accept: application/json
   - GET /rest/1.0/search/setlists — search setlists (accepts artistMbid and city query params)
   - GET /rest/1.0/setlist/{setlistId} — get a single setlist's details
 - Notes:
-  - The app first resolves an artist to a MusicBrainz MBID, then queries Setlist.fm using that MBID and an optional location filter.
+  - The app first resolves an artist to a MusicBrainz MBID, then queries Setlist.fm using that MBID and an optional city filter.
   - Respect Setlist.fm rate limits and cache or log responses where appropriate (see Logging section).
 - Docs: https://api.setlist.fm/docs/1.0/index.html
 

@@ -68,9 +68,9 @@ describe('SetlistFmClient', () => {
       expect(mockLogger.info.calledWith(`Searching Setlist.fm for artist ${mbid}`)).to.be.true;
     });
 
-    it('should include location in search when provided', async () => {
+    it('should include city in search when provided', async () => {
       const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';
-      const location = 'Wellington';
+      const city = 'Wellington';
       const mockResponse = { setlist: [] };
 
       fetchStub.resolves({
@@ -78,11 +78,11 @@ describe('SetlistFmClient', () => {
         json: sinon.stub().resolves(mockResponse)
       });
 
-      await client.searchSetlistsByArtist(mbid, location);
+      await client.searchSetlistsByArtist(mbid, city);
 
       const callUrl = fetchStub.firstCall.args[0];
       expect(callUrl).to.include('cityName=Wellington');
-      expect(mockLogger.info.calledWith(`Searching Setlist.fm for artist ${mbid} in ${location}`)).to.be.true;
+      expect(mockLogger.info.calledWith(`Searching Setlist.fm for artist ${mbid} in ${city}`)).to.be.true;
     });
 
     it('should throw error on failed API response', async () => {

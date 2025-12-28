@@ -39,22 +39,22 @@ async function getArtistMBID(rl, artistName) {
   return result;
 }
 
-async function getLocation(rl) {
-  const location = await prompt(rl, 'Enter a location (optional): ');
+async function getCity(rl) {
+  const city = await prompt(rl, 'Enter a city (optional): ');
 
-  if (location) {
-    console.log(`\nLocation: ${location}\n`);
-    logger.info(`Location provided: ${location}`);
+  if (city) {
+    console.log(`\nCity: ${city}\n`);
+    logger.info(`City provided: ${city}`);
   } else {
-    console.log('\nNo location specified\n');
-    logger.info('No location provided');
+    console.log('\nNo city specified\n');
+    logger.info('No city provided');
   }
 
-  return location;
+  return city;
 }
 
-async function searchSetlists(mbid, location) {
-  return setlistClient.searchSetlistsByArtist(mbid, location);
+async function searchSetlists(mbid, city) {
+  return setlistClient.searchSetlistsByArtist(mbid, city);
 }
 
 function displaySetlists(data) {
@@ -97,9 +97,9 @@ export async function setlist() {
       return;
     }
 
-    const location = await getLocation(rl);
+    const city = await getCity(rl);
 
-    const setlistData = await searchSetlists(artist.mbid, location);
+    const setlistData = await searchSetlists(artist.mbid, city);
     const mostRecentMatchingSetlist = displaySetlists(setlistData);
 
     if (mostRecentMatchingSetlist) {
