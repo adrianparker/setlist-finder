@@ -7,6 +7,7 @@ This project is building a **command-line application** using **Node.js** that:
 - Runs on **macOS**, but should retain **OS independence**.
 - Accepts an **artist name** input from the user.
 - Uses the **MusicBrainz API** to return the **MusicBrainz artist ID (mbid)** for the given name.
+- Uses the **Setlist.fm API** to retrieve setlists for the artist.
 - All API calls use **JSON** responses.
 
 ## 📡 MusicBrainz API
@@ -17,14 +18,32 @@ The application will interact with the **MusicBrainz Web API**:
 - Responses can be returned as **JSON** by specifying the appropriate format (`fmt=json` or `Accept: application/json`).
 - To find an artist's MBID when only the name is provided, the app should **search the artist resource** with a query using the artist name.
 
+## 🎵 Setlist.fm API
+
+The application will interact with the **Setlist.fm Web API**:
+
+- The API is a **RESTful web service** to access setlist data for artists.
+- **Base URL**: `https://api.setlist.fm/rest/1.0/`
+- **Authentication**: Requires an API key passed via `x-api-key` header.
+- **Response Format**: Always returns **JSON** (no format parameter needed).
+- **Rate Limits**: Refer to [Setlist.fm API Documentation](https://api.setlist.fm/docs/1.0/index.html) for rate limiting details.
+- **Key Endpoints**:
+  - `GET /search/setlists?artistMbid={mbid}` - Search setlists by artist MusicBrainz ID
+- **Documentation**: https://api.setlist.fm/docs/1.0/index.html
+
 ## 🧪 JSON Format
 
-When calling the MusicBrainz API:
+When calling APIs:
 
+**MusicBrainz API:**
 - By default, the API returns XML.
 - To receive JSON, the request must either include:
   - `fmt=json` as a query parameter, **or**
   - `Accept: application/json` in the request headers.
+
+**Setlist.fm API:**
+- Always returns JSON responses.
+- Requires `x-api-key` header with valid API key.
 
 ## 🔍 Handling Artist Input
 
@@ -32,15 +51,13 @@ When calling the MusicBrainz API:
 - If the input is **insufficient or ambiguous**, ask a **clarifying question** to refine the search (e.g., ask for more details or alternate spellings).
 - After searching the MusicBrainz API for the artist, parse the results to:
   - Identify the best matching artist,
-  - And extract the **MusicBrainz artist ID (mbid)**.
+  - Extract the **MusicBrainz artist ID (mbid)**.
+- Use the MBID to query the Setlist.fm API for the artist's setlists.
 
-## 📘 MusicBrainz API Documentation
+## 📘 API Documentation
 
-Developers should reference the official API docs at:
-
-https://musicbrainz.org/doc/MusicBrainz_API
-
-This contains details on search endpoints, parameters, rate limits, and how JSON versus XML responses work.
+- **MusicBrainz API**: https://musicbrainz.org/doc/MusicBrainz_API
+- **Setlist.fm API**: https://api.setlist.fm/docs/1.0/index.html
 
 ---
 
@@ -61,8 +78,12 @@ This contains details on search endpoints, parameters, rate limits, and how JSON
 
 ### Output
 - **MBID Result**: Output the MusicBrainz artist ID to console in a user-friendly format
+- **Setlists Result**: Output artist setlists to console in a user-friendly format
 
 ### Recommended CLI Approach
 - Use **Commander.js** for professional CLI argument parsing and help documentation
-- Structure: Modular design with separate concerns (API client, logger, CLI handler, business logic)
+- Structure: Modular design with separate concerns (API clients, logger, CLI handlers, business logic)
+- Commands:
+  - `search <artistName>` - Search for artist MBID only
+  - `setlist` - Interactive mode: search for artist, then fetch and display setlists
 
