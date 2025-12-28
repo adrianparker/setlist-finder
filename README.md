@@ -19,13 +19,13 @@ cd setlist-finder
 npm install
 ```
 
-3. Copy the example environment file and add your Setlist.fm API key:
+3. Copy the example environment file to a new `.env` file:
 
 ```bash
 cp .env.example .env
 ```
 
-Then open `.env` and set your API key, for example:
+4. Open `.env` and set your [Setlist.fm API key](https://api.setlist.fm/docs/1.0/index.html).
 
 ```
 SETLISTFM_API_KEY=your_setlistfm_api_key_here
@@ -60,10 +60,10 @@ Found 1 setlist(s):
 
 ### Search for an Artist MBID
 
-This function just finds the MusicBrainz ID for the artist that best natches your artist search term. Only useful for debugging.
+Finds the MusicBrainz ID for the artist that best natches your artist search term. 
 
 ```bash
-npm start search Portishead
+npm start search <artist>
 ```
 
 #### Example Output
