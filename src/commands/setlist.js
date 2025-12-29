@@ -37,7 +37,7 @@ async function getArtistMBID(artistName) {
 }
 
 async function getCity(rl) {
-  const city = await prompt(rl, 'Enter a city (optional): ');
+  const city = await prompt(rl, `Enter a city (optional): `);
   logger.info(`City provided: ${city? city : 'None'}`);
   return city;
 }
@@ -69,7 +69,7 @@ export async function setlist() {
   const rl = createReadlineInterface();
 
   try {
-    const artistName = await prompt(rl, '\nEnter artist name: ');
+    const artistName = await prompt(rl, `\nEnter artist name: `);
 
     if (!artistName) {
       logger.warn('Artist name cannot be empty');
