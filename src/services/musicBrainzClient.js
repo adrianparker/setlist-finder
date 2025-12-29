@@ -8,7 +8,7 @@ export class MusicBrainzClient {
   async searchArtist(artistName) {
     const url = new URL(`${this.baseUrl}/artist?query=${encodeURIComponent(artistName)}&fmt=json`);
     
-    this.logger.info(`API Request: GET ${url.toString()}`);
+    this.logger.info(`MusicBrainz API Request: GET ${url.toString()}`);
 
     try {
       const response = await fetch(url.toString(), {
@@ -20,7 +20,7 @@ export class MusicBrainzClient {
       }
 
       const data = await response.json();
-      this.logger.info(`API Response: ${data.artists?.length || 0} results found`);
+      this.logger.info(`${data.artists?.length || 0} results found`);
 
       if (data.artists && data.artists.length > 0) {
         if (data.artists.length > 1) {

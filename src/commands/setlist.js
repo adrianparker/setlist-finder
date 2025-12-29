@@ -22,34 +22,23 @@ function prompt(rl, question) {
   });
 }
 
-async function getArtistMBID(rl, artistName) {
-  logger.info(`Setlist command: Searching for artist: ${artistName}`);
+async function getArtistMBID(artistName) {
+  logger.info(`Searching for artist: ${artistName}`);
   const result = await mbClient.searchArtist(artistName);
 
   if (!result) {
-    console.log(`\nNo artist found matching "${artistName}"\n`);
     logger.info(`No results found for artist: ${artistName}`);
     return null;
   }
 
-  console.log(`\nFound artist: ${result.name}`);
-  console.log(`  MBID: ${result.mbid}\n`);
-  logger.info(`Successfully found artist MBID: ${result.mbid}`);
+  logger.info(`Selected ${artistName} MBID: ${result.mbid}`);
 
   return result;
 }
 
 async function getCity(rl) {
   const city = await prompt(rl, 'Enter a city (optional): ');
-
-  if (city) {
-    console.log(`\nCity: ${city}\n`);
-    logger.info(`City provided: ${city}`);
-  } else {
-    console.log('\nNo city specified\n');
-    logger.info('No city provided');
-  }
-
+  logger.info(`City provided: ${city? city : 'None'}`);
   return city;
 }
 
@@ -59,22 +48,20 @@ async function searchSetlists(mbid, city) {
 
 function displaySetlists(data) {
   if (!data.setlist || data.setlist.length === 0) {
-    console.log('No setlists found.\n');
+    logger.info('No setlists found.');
     return;
   }
 
-  console.log(`Found ${data.setlist.length} setlist(s):\n`);
+  logger.info(`Found ${data.setlist.length} setlist(s):`);
   
   data.setlist.forEach((setlist, index) => {
     const eventDate = setlist.eventDate || 'Date unknown';
     const venueName = setlist.venue?.name || 'Unknown venue';
     const city = setlist.venue?.city?.name || 'Unknown city';
     const country = setlist.venue?.city?.country?.name || 'Unknown country';
-    
-    console.log(`${index + 1}. ${eventDate}`);
-    console.log(`   Venue: ${venueName}, ${city}, ${country}`);
-    console.log(`   Setlist ID: ${setlist.id}\n`);
+    logger.info(`${index + 1}. ${eventDate} Venue: ${venueName}, ${city}, ${country} Setlist ID: ${setlist.id}`);
   });
+  // TODO extract user choice when more than one setlist
   return data.setlist[0].id;
 }
 
@@ -85,14 +72,15 @@ export async function setlist() {
     const artistName = await prompt(rl, '\nEnter artist name: ');
 
     if (!artistName) {
-      console.log('\nArtist name cannot be empty\n');
+      logger.warn('Artist name cannot be empty');
       rl.close();
       return;
     }
 
-    const artist = await getArtistMBID(rl, artistName);
+    const artist = await getArtistMBID(artistName);
 
-    if (!artist) {
+    if (!(artist && artist.mbid)) {
+      logger.info(`No MBID found for ${artistName}, exiting.`);
       rl.close();
       return;
     }
@@ -103,28 +91,23 @@ export async function setlist() {
     const mostRecentMatchingSetlist = displaySetlists(setlistData);
 
     if (mostRecentMatchingSetlist) {
-      console.log(`Most recent matching setlist ID: ${mostRecentMatchingSetlist}`);
+      logger.info(`Most recent matching setlist ID: ${mostRecentMatchingSetlist}`);
       try {
         const setlistResponse = await setlistClient.getSetlist(mostRecentMatchingSetlist);
 
         if (setlistResponse) {
-          console.log('\nSetlist content:\n');
+          // TODO replace with formatted output
           console.log(JSON.stringify(setlistResponse, null, 2));
-          logger.info(`Fetched setlist details for ID: ${mostRecentMatchingSetlist}`);
         } else {
-          console.log('\nNo setlist content returned from getSetlist\n');
           logger.info(`No setlist content for ID: ${mostRecentMatchingSetlist}`);
         }
       } catch (err) {
         logger.error(`Failed to fetch setlist details: ${err.message}`);
-        console.error(`\nError fetching setlist details: ${err.message}\n`);
       }
     }
 
-    logger.info('Setlist search completed successfully');
   } catch (error) {
     logger.error(`Setlist command error: ${error.message}`);
-    console.error(`\nError: ${error.message}\n`);
     process.exit(1);
   } finally {
     rl.close();

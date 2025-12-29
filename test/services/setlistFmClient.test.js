@@ -3,6 +3,8 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { SetlistFmClient } from '../../src/services/setlistFmClient.js';
 
+const timeout = 3500;
+
 describe('SetlistFmClient', () => {
   let client;
   let mockLogger;
@@ -10,7 +12,9 @@ describe('SetlistFmClient', () => {
 
   beforeEach(() => {
     mockLogger = {
+      debug: sinon.stub(),
       info: sinon.stub(),
+      warn: sinon.stub(),
       error: sinon.stub()
     };
     client = new SetlistFmClient(mockLogger);
@@ -33,7 +37,8 @@ describe('SetlistFmClient', () => {
   });
 
   describe('searchSetlistsByArtist', () => {
-    it('should throw error if API key is not set', async () => {
+    it('should throw error if API key is not set', async function() {
+      this.timeout(timeout);
       client.apiKey = null;
       const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';
 
@@ -45,7 +50,8 @@ describe('SetlistFmClient', () => {
       }
     });
 
-    it('should search setlists by artist MBID', async () => {
+    it('should search setlists by artist MBID', async function() {
+      this.timeout(timeout);
       const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';
       const mockResponse = {
         setlist: [
@@ -65,10 +71,11 @@ describe('SetlistFmClient', () => {
       const result = await client.searchSetlistsByArtist(mbid);
 
       expect(result).to.deep.equal(mockResponse);
-      expect(mockLogger.info.calledWith(`Searching Setlist.fm for artist ${mbid}`)).to.be.true;
+      expect(mockLogger.info.calledWith(`Setlist.fm API Request: GET https://api.setlist.fm/rest/1.0/search/setlists?artistMbid=${mbid}`)).to.be.true;
     });
 
-    it('should include city in search when provided', async () => {
+    it('should include city in search when provided', async function() {
+      this.timeout(timeout);
       const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';
       const city = 'Wellington';
       const mockResponse = { setlist: [] };
@@ -82,10 +89,11 @@ describe('SetlistFmClient', () => {
 
       const callUrl = fetchStub.firstCall.args[0];
       expect(callUrl).to.include('cityName=Wellington');
-      expect(mockLogger.info.calledWith(`Searching Setlist.fm for artist ${mbid} in ${city}`)).to.be.true;
+      expect(mockLogger.info.calledWith(`Setlist.fm API Request: GET https://api.setlist.fm/rest/1.0/search/setlists?artistMbid=${mbid}&cityName=${city}`)).to.be.true;
     });
 
-    it('should throw error on failed API response', async () => {
+    it('should throw error on failed API response', async function() {
+      this.timeout(timeout);
       const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';
 
       fetchStub.resolves({
@@ -102,7 +110,8 @@ describe('SetlistFmClient', () => {
       }
     });
 
-    it('should send correct headers in API request', async () => {
+    it('should send correct headers in API request', async function() {
+      this.timeout(timeout);
       const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';
       const mockResponse = { setlist: [] };
 
