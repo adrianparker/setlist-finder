@@ -3,7 +3,8 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { SetlistFmClient } from '../../src/services/setlistFmClient.js';
 
-const timeout = 3500;
+// 300 ms slower than the client to account for test execution overhead
+const timeout = 2800;
 
 describe('SetlistFmClient', () => {
   let client;

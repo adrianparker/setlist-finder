@@ -1,5 +1,8 @@
 import 'dotenv/config';
 
+// wait given milliseconds before executing each Setlist.fm request, to avoid 429 "Too Many Requests" errors
+const timeout = 2500;
+
 export class SetlistFmClient {
   constructor(logger) {
     this.logger = logger;
@@ -25,8 +28,7 @@ export class SetlistFmClient {
     if (!this.apiKey) {
       throw new Error('SETLISTFM_API_KEY environment variable is not set');
     }
-    // wait 3 seconds before executing each Setlist.fm request, to avoid 429 "Too Many Requests" errors
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await new Promise(resolve => setTimeout(resolve, timeout));
     
     this.logger.info(`Setlist.fm API Request: GET ${url.toString()}`);
     const response = await fetch(url.toString(), {

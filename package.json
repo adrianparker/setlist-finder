@@ -1,6 +1,6 @@
 {
   "name": "setlist-finder",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Finds a setlist.",
   "main": "src/index.js",
   "type": "module",
