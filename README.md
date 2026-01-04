@@ -99,7 +99,7 @@ npm run test:watch
 
 API calls are logged to local files:
 
-- **City**: `logs/` directory
+- **Location**: `logs/` directory
 - **Format**: `YYYY-MM-DD.log` (one file per day)
 - **Content**: Timestamps, log levels, and API request/response details
 
