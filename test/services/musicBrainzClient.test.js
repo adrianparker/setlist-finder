@@ -56,4 +56,16 @@ describe('MusicBrainzClient', () => {
       expect(error.message).to.include('HTTP 404');
     }
   });
+
+  it('should initialize with logger', () => {
+    expect(client.logger).to.equal(mockLogger);
+  });
+  
+  it('should set baseUrl to MusicBrainz API endpoint', () => {
+    expect(client.baseUrl).to.equal('https://musicbrainz.org/ws/2');
+  });
+  
+  it('should set userAgent to a string beginning with setlist-finder', () => {
+    expect(client.userAgent).to.match(/^setlist-finder\/\d+\.\d+\.\d+/);
+  });
 });

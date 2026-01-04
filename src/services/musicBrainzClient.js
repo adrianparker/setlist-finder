@@ -1,8 +1,11 @@
+import fs from 'fs';
+const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+
 export class MusicBrainzClient {
   constructor(logger) {
     this.logger = logger;
     this.baseUrl = 'https://musicbrainz.org/ws/2';
-    this.userAgent = 'SetlistFinder/1.0.0 (Adrian Parker adrian@iceknife.com)';
+    this.userAgent = pkg.name + '/' + pkg.version;
   }
 
   async searchArtist(artistName) {
