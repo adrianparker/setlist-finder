@@ -118,6 +118,15 @@ function displaySetlist(setlistResponse) {
     logger.error('No setlist response to display.');
     return;
   }
-  logger.info(`${setlistResponse.artist?.name ? setlistResponse.artist.name : 'Unknown Artist'} @ ${setlistResponse.venue?.name ? setlistResponse.venue.name : 'Unknown Venue'}, ${setlistResponse.venue?.city?.name ? setlistResponse.venue.city.name : 'Unknown City'} ${setlistResponse.venue?.city?.country?.name ? setlistResponse.venue.city.country.name : 'Unknown Country'}  on ${setlistResponse.eventDate ? setlistResponse.eventDate : 'Unknown Date'} (ID: ${setlistResponse.id ? setlistResponse.id : 'Unknown ID'} ${setlistResponse.url})`);
+
+  const artistName = setlistResponse.artist?.name || 'Unknown Artist';
+  const venueName = setlistResponse.venue?.name || 'Unknown Venue';
+  const cityName = setlistResponse.venue?.city?.name || 'Unknown City';
+  const countryName = setlistResponse.venue?.city?.country?.name || 'Unknown Country';
+  const eventDate = setlistResponse.eventDate || 'Unknown Date';
+  const setlistId = setlistResponse.id || 'Unknown ID';
+  const url = setlistResponse.url || '';
+
+  logger.info(`${artistName} @ ${venueName}, ${cityName} ${countryName} on ${eventDate} (ID: ${setlistId} ${url})`);
   //console.log(JSON.stringify(setlistResponse, null, 2))
 }
