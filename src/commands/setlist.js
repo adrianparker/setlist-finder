@@ -38,7 +38,7 @@ async function getArtistMBID(artistName) {
 
 async function getCity(rl) {
   const city = await prompt(rl, `Enter a city (optional): `);
-  logger.info(`City provided: ${city? city : 'None'}`);
+  logger.debug(`City provided: ${city? city : 'None'}`);
   return city;
 }
 
@@ -96,8 +96,7 @@ export async function setlist() {
         const setlistResponse = await setlistClient.getSetlist(mostRecentMatchingSetlist);
 
         if (setlistResponse) {
-          // TODO replace with formatted output
-          console.log(JSON.stringify(setlistResponse, null, 2));
+          displaySetlist(setlistResponse)
         } else {
           logger.info(`No setlist content for ID: ${mostRecentMatchingSetlist}`);
         }
@@ -112,4 +111,13 @@ export async function setlist() {
   } finally {
     rl.close();
   }
+}
+
+function displaySetlist(setlistResponse) {
+  if(!setlistResponse) {
+    logger.error('No setlist response to display.');
+    return;
+  }
+  logger.info(`${setlistResponse.artist?.name ? setlistResponse.artist.name : 'Unknown Artist'} @ ${setlistResponse.venue?.name ? setlistResponse.venue.name : 'Unknown Venue'}, ${setlistResponse.venue?.city?.name ? setlistResponse.venue.city.name : 'Unknown City'} ${setlistResponse.venue?.city?.country?.name ? setlistResponse.venue.city.country.name : 'Unknown Country'}  on ${setlistResponse.eventDate ? setlistResponse.eventDate : 'Unknown Date'} (ID: ${setlistResponse.id ? setlistResponse.id : 'Unknown ID'} ${setlistResponse.url})`);
+  //console.log(JSON.stringify(setlistResponse, null, 2))
 }
