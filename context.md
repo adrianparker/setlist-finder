@@ -8,6 +8,7 @@ This project is building a **command-line application** using **Node.js** that:
 - Accepts an **artist name** input from the user.
 - Uses the **MusicBrainz API** to return the **MusicBrainz artist ID (mbid)** for the given name.
 - Uses the **Setlist.fm API** to retrieve setlists for the artist.
+- Parses songs from setlist responses and matches them to **Spotify** for playlist data.
 - All API calls use **JSON** responses.
 
 ## 📡 MusicBrainz API
@@ -31,6 +32,44 @@ The application will interact with the **Setlist.fm Web API**:
   - `GET /search/setlists?artistMbid={mbid}` - Search setlists by artist MusicBrainz ID
 - **Documentation**: https://api.setlist.fm/docs/1.0/index.html
 
+## 🎶 Spotify Web API
+
+The application integrates with the **Spotify Web API** to match setlist songs and provide track identifiers for playlist data:
+
+- **Base URL**: `https://api.spotify.com/v1/`
+- **Authentication**: Uses **Client Credentials OAuth 2.0** flow
+  - Requests an access token from `https://accounts.spotify.com/api/token`
+  - Access tokens are cached and reused until expiration
+- **Response Format**: Always returns **JSON**.
+- **Key Endpoints**:
+  - `GET /search` - Search for tracks using field filters: `q=artist:artistName track:songName`
+- **Query Parameters**:
+  - `q` - Search query with field filters (required, must be URL encoded)
+  - `type=track` - Specify search type (required)
+  - `limit` - Maximum results per type (range 0-10, default 5)
+- **Headers**: 
+  - `Authorization: Bearer {access_token}` - Bearer token authentication
+  - No `Content-Type` header for GET requests
+- **Documentation**: https://developer.spotify.com/documentation/web-api/reference/search
+- **Setup**: Create a Spotify app at https://developer.spotify.com/dashboard to get Client ID and Secret
+
+### Spotify Integration Features
+
+- **Song Matching Algorithm**:
+  - Parses songs from setlist JSON responses using `parseSetlistSongs()` utility
+  - Searches Spotify for each song using `artist:"{name}" track:"{name}"` query format
+  - Intelligent preference-based selection via `SpotifyMatcher`:
+    - **Live priority**: Prefers live versions (album names containing "Live", "Concert", or "live")
+    - **Most recent**: When multiple matches exist, selects newest release date
+    - **Fallback**: If no live matches, applies most recent logic to studio versions
+    - **Artist matching**: Case-insensitive exact match for flexibility
+  
+- **Data Output**: For each matched song, stores:
+  - Original setlist metadata: song name, artist, set number, encore status
+  - Spotify identifiers: track ID, URI, track name
+  - Album information: album name, release date, popularity score, explicit flag
+  - Logging: Matched songs include album name and release date; unmatched songs logged with warnings
+
 ## 🧪 JSON Format
 
 When calling APIs:
@@ -44,6 +83,11 @@ When calling APIs:
 **Setlist.fm API:**
 - Always returns JSON responses.
 - Requires `x-api-key` header with valid API key.
+
+**Spotify API:**
+- Always returns JSON responses.
+- Requires `Authorization: Bearer {access_token}` header.
+- Query strings must be URL encoded with `encodeURIComponent()`.
 
 ## 🔍 Handling Artist Input
 
@@ -95,5 +139,25 @@ When calling APIs:
 - Structure: Modular design with separate concerns (API clients, logger, CLI handlers, business logic)
 - Commands:
   - `search <artistName>` - Search for artist MBID only
-  - `setlist` - Interactive mode: search for artist, then fetch and display setlists
+  - `setlist` - Interactive mode: search for artist, then fetch and display setlists, then match songs to Spotify
+
+### Service Architecture
+
+**API Client Services:**
+- `MusicBrainzClient` - Searches for artists, returns MBID
+- `SetlistFmClient` - Fetches setlists by artist MBID, includes rate limiting (2.5s throttle)
+- `SpotifyClient` - Searches tracks on Spotify, handles Client Credentials OAuth flow with token caching
+
+**Utility & Matching Services:**
+- `SetlistParser` - Extracts songs from setlist JSON responses, preserves set numbers and encore info
+- `SpotifyMatcher` - Matches Spotify search results with live preference and recency logic
+
+**Supporting Services:**
+- `Logger` - Winston-based logging with console output and date-based file storage in `logs/` folder
+
+**Environment Configuration:**
+- `.env` file required with:
+  - `SETLISTFM_API_KEY` - API key from setlist.fm
+  - `SPOTIFY_CLIENT_ID` - Client ID from Spotify Developer Dashboard
+  - `SPOTIFY_CLIENT_SECRET` - Client Secret from Spotify Developer Dashboard
 
