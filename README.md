@@ -1,10 +1,12 @@
 # Setlist Finder
 
-A command-line application that finds a setlist.
+A command-line application that finds a setlist, then makes a Spotify playlist of it.
 
 ## Features
 
 Search for setlists by first finding the artist, then narrowing with city if known.
+If a setlist is found, creates a Spotify playlist of that setlist.
+The playlist created prefers live songs over studio versions, and uses the most recent release.
 
 ## Installation
 
@@ -29,6 +31,13 @@ cp .env.example .env
 
 ```
 SETLISTFM_API_KEY=your_setlistfm_api_key_here
+```
+
+5. Open `.env` and set your [Spotify app client ID and secret](https://developer.spotify.com/).
+
+```
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
 ```
 
 ## Usage
@@ -56,6 +65,9 @@ Found 1 setlist(s):
 1. 22-08-1990
    Venue: Wellington Town Hall, Wellington, New Zealand
    Setlist ID: 4bd11b46
+
+TODO update this example
+
 ```
 
 ### Search for an Artist MBID
@@ -108,7 +120,7 @@ API calls are logged to local files:
 - **Runtime**: Node.js
 - **CLI Framework**: Commander.js
 - **Testing**: Mocha + Chai + Sinon
-- **API**: MusicBrainz Web API and Setlist.fm Web API
+- **API**: MusicBrainz Web API, Setlist.fm Web API, Spotify Web API
 
 ## Setlist.fm API
 
@@ -130,6 +142,11 @@ Accept: application/json
 ## MusicBrainz API
 
 This application uses the [MusicBrainz Web API](https://musicbrainz.org/doc/MusicBrainz_API) to search for artist information.
+
+
+## Spotify API
+
+TODO add documentation 
 
 ## License
 
