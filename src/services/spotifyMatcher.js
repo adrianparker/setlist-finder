@@ -20,8 +20,6 @@ export class SpotifyMatcher {
       return null;
     }
 
-    this.logger.debug(`Matching ${spotifyTracks.length} Spotify track(s) for: ${artistName} - ${songName}`);
-
     // Step 1: Filter by artist name match (case-insensitive)
     const artistMatches = spotifyTracks.filter(track => {
       return track.artists.some(artist => 
@@ -34,13 +32,9 @@ export class SpotifyMatcher {
       return null;
     }
 
-    this.logger.debug(`Found ${artistMatches.length} track(s) with matching artist name`);
-
     // Step 2: Separate live and studio versions
     const liveVersions = artistMatches.filter(track => this.isLiveAlbum(track.album.name));
     const studioVersions = artistMatches.filter(track => !this.isLiveAlbum(track.album.name));
-
-    this.logger.debug(`Live versions: ${liveVersions.length}, Studio versions: ${studioVersions.length}`);
 
     // Step 3: Prefer live versions
     const candidateTracks = liveVersions.length > 0 ? liveVersions : studioVersions;
@@ -49,9 +43,9 @@ export class SpotifyMatcher {
     const sorted = this.sortByReleaseDate(candidateTracks);
     const bestMatch = sorted[0];
 
-    const matchType = liveVersions.length > 0 ? 'live' : 'studio';
+    const matchType = liveVersions.length > 0 ? 'Live' : 'Studio';
     const releaseDate = bestMatch.album.releaseDate || 'unknown date';
-    this.logger.debug(`Selected ${matchType} version: "${bestMatch.album.name}" (${releaseDate})`);
+    this.logger.debug(`${matchType} version: "${bestMatch.album.name}" (${releaseDate})`);
 
     return bestMatch;
   }

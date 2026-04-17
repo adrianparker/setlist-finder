@@ -61,8 +61,6 @@ export class SpotifyClient {
       const query = `artist:${artistName} track:${songName}`;
       const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=10`;
   
-      this.logger.debug(`Searching Spotify for: ${artistName} - ${songName}`);
-  
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`
@@ -75,8 +73,6 @@ export class SpotifyClient {
   
       const data = await response.json();
       const tracks = data.tracks?.items || [];
-      
-      this.logger.debug(`Found ${tracks.length} track(s) on Spotify for: ${artistName} - ${songName}`);
   
       return tracks.map(track => ({
         id: track.id,

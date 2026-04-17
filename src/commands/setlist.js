@@ -57,9 +57,10 @@ async function searchSetlists(mbid, city) {
 }
 
 function displaySetlists(data) {
+  const setlistIDs = [];
   if (!data.setlist || data.setlist.length === 0) {
     logger.info('No setlists found.');
-    return;
+    return setlistIDs;
   }
 
   logger.info(`Found ${data.setlist.length} setlist(s):`);
@@ -70,9 +71,9 @@ function displaySetlists(data) {
     const city = setlist.venue?.city?.name || 'Unknown city';
     const country = setlist.venue?.city?.country?.name || 'Unknown country';
     logger.info(`${index + 1}. ${eventDate} Venue: ${venueName}, ${city}, ${country} Setlist ID: ${setlist.id}`);
+    setlistIDs.push(setlist.id);
   });
-  // TODO extract user choice when more than one setlist
-  return data.setlist[0].id;
+  return setlistIDs;
 }
 
 export async function setlist() {
@@ -98,18 +99,18 @@ export async function setlist() {
     const city = await getCity(rl);
 
     const setlistData = await searchSetlists(artist.mbid, city);
-    const mostRecentMatchingSetlist = displaySetlists(setlistData);
+    const matchingSetlists = displaySetlists(setlistData);
 
-    if (mostRecentMatchingSetlist) {
-      logger.info(`Most recent matching setlist ID: ${mostRecentMatchingSetlist}`);
+    //TODO offer option to select from multiple setlists if more than one found; or choose; or most recent with songs; or...
+    if (matchingSetlists && matchingSetlists.length > 0) {
       try {
-        const setlistResponse = await setlistClient.getSetlist(mostRecentMatchingSetlist);
+        const setlistResponse = await setlistClient.getSetlist(matchingSetlists[0]);
 
         if (setlistResponse) {
           const playlistName = displaySetlist(setlistResponse);
           await findSpotifySongs(setlistResponse, playlistName, rl);
         } else {
-          logger.info(`No setlist content for ID: ${mostRecentMatchingSetlist}`);
+          logger.info(`No setlist content for ID: ${matchingSetlists}`);
         }
       } catch (err) {
         logger.error(`Failed to fetch setlist details: ${err.message}`);
@@ -194,8 +195,7 @@ async function findSpotifySongs(setlistResponse, playlistName, rl) {
           matched++;
 
           logger.info(
-            `✓ ${song.songName} | Album: ${bestMatch.album.name} | ` +
-            `Released: ${bestMatch.album.releaseDate} | Spotify ID: ${bestMatch.id}`
+            `✓ ${song.songName} | Album: ${bestMatch.album.name} | ${bestMatch.album.releaseDate} | Spotify ID: ${bestMatch.id}`
           );
         } else {
           unmatched++;
