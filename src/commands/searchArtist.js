@@ -9,9 +9,9 @@ export async function searchArtist(artistName) {
     logger.info(`Searching for artist: ${artistName}`);
     const result = await mbClient.searchArtist(artistName);
     
-    logger.debug(`\nFound artist: ${result && result.name ? result.name : 'None'}`);
+    logger.debug(`Found artist: ${result && result.name ? result.name : 'None'}`);
     if (result && result.mbid) {
-      logger.info(`MBID: ${result.mbid}\n`);
+      logger.info(`MBID: ${result.mbid}`);
     }
   } catch (error) {
     logger.error(`Error searching for artist: ${error.message}`);

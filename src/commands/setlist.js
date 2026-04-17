@@ -79,7 +79,7 @@ export async function setlist() {
   const rl = createReadlineInterface();
 
   try {
-    const artistName = await prompt(rl, `\nEnter artist name: `);
+    const artistName = await prompt(rl, `Enter artist name: `);
 
     if (!artistName) {
       logger.warn('Artist name cannot be empty');
@@ -150,7 +150,7 @@ async function findSpotifySongs(setlistResponse, playlistName, rl) {
   }
 
   try {
-    logger.info('\\nMatching setlist songs with Spotify...');
+    logger.info('Matching setlist songs with Spotify...');
     const songs = parseSetlistSongs(setlistResponse);
     
     if (songs.length === 0) {
@@ -158,7 +158,7 @@ async function findSpotifySongs(setlistResponse, playlistName, rl) {
       return;
     }
 
-    logger.info(`Found ${songs.length} song(s) in setlist\\n`);
+    logger.info(`Found ${songs.length} song(s) in setlist`);
 
     const playlistData = [];
     let matched = 0;
@@ -208,7 +208,6 @@ async function findSpotifySongs(setlistResponse, playlistName, rl) {
     }
 
     logger.info(
-      `\\n--- Summary ---\\n` +
       `Total songs: ${songs.length} | ` +
       `Matched: ${matched} | ` +
       `Unmatched: ${unmatched}` +
@@ -218,10 +217,10 @@ async function findSpotifySongs(setlistResponse, playlistName, rl) {
     // Attempt to create Spotify playlist if we have matched songs
     if (playlistData.length > 0 && rl) {
       try {
-        logger.info('\\nTo create a Spotify playlist, you need a personal Spotify access token.');
+        logger.info('To create a Spotify playlist, you need a personal Spotify access token.');
         logger.info('Get your token here: https://developer.spotify.com/tools/web-playback-tester');
         logger.info('(Log in with your Spotify account, scroll down to "Copy Your Access Token")');
-        const spotifyAccessToken = await prompt(rl, '\\nPaste your Spotify access token (or press Enter to skip): ');
+        const spotifyAccessToken = await prompt(rl, 'Paste your Spotify access token (or press Enter to skip): ');
         
         if (spotifyAccessToken) {
           await createSpotifyPlaylist(playlistName, playlistData, spotifyAccessToken);
@@ -241,7 +240,7 @@ async function findSpotifySongs(setlistResponse, playlistName, rl) {
 
 async function createSpotifyPlaylist(playlistName, playlistData, spotifyAccessToken) {
   try {
-    logger.info(`\\nCreating Spotify playlist: "${playlistName}"`);
+    logger.info(`Creating Spotify playlist: "${playlistName}"`);
 
     // Create the playlist using the user's access token
     const playlistResponse = await spotifyClient.createPlaylistAsUser(spotifyAccessToken, playlistName, true);
@@ -259,10 +258,9 @@ async function createSpotifyPlaylist(playlistName, playlistData, spotifyAccessTo
 
     // Log success with playlist URL
     const playlistUrl = `https://open.spotify.com/playlist/${playlistResponse.id}`;
-    logger.info(`\\n✓ Playlist created successfully!`);
+    logger.info(`Playlist created successfully!`);
     logger.info(`  Playlist: "${playlistName}"`);
     logger.info(`  URL: ${playlistUrl}`);
-    logger.info(`  Tracks: ${trackUris.length} songs added in setlist order`);
 
   } catch (err) {
     logger.error(`Failed to create Spotify playlist: ${err.message}`);
