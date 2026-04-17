@@ -106,8 +106,8 @@ export async function setlist() {
         const setlistResponse = await setlistClient.getSetlist(mostRecentMatchingSetlist);
 
         if (setlistResponse) {
-          displaySetlist(setlistResponse);
-          await findSpotifySongs(setlistResponse);
+          const playlistName = displaySetlist(setlistResponse);
+          await findSpotifySongs(setlistResponse, playlistName, rl);
         } else {
           logger.info(`No setlist content for ID: ${mostRecentMatchingSetlist}`);
         }
@@ -127,7 +127,7 @@ export async function setlist() {
 function displaySetlist(setlistResponse) {
   if(!setlistResponse) {
     logger.error('No setlist response to display.');
-    return;
+    return null;
   }
 
   const artistName = setlistResponse.artist?.name || 'Unknown Artist';
@@ -137,12 +137,13 @@ function displaySetlist(setlistResponse) {
   const eventDate = setlistResponse.eventDate || 'Unknown Date';
   const setlistId = setlistResponse.id || 'Unknown ID';
   const url = setlistResponse.url || '';
+  const playlistName = `${artistName} @ ${venueName}, ${cityName} ${countryName} on ${eventDate} (ID: ${setlistId} ${url})`;
 
-  logger.info(`${artistName} @ ${venueName}, ${cityName} ${countryName} on ${eventDate} (ID: ${setlistId} ${url})`);
-  console.log(JSON.stringify(setlistResponse, null, 2))
+  logger.info(playlistName);
+  return playlistName;
 }
 
-async function findSpotifySongs(setlistResponse) {
+async function findSpotifySongs(setlistResponse, playlistName, rl) {
   if (!spotifyClient) {
     logger.warn('Spotify client not available, skipping song matching');
     return;
@@ -214,8 +215,57 @@ async function findSpotifySongs(setlistResponse) {
       (tapeSkipped > 0 ? ` | Tapes skipped: ${tapeSkipped}` : '')
     );
 
+    // Attempt to create Spotify playlist if we have matched songs
+    if (playlistData.length > 0 && rl) {
+      try {
+        logger.info('\\nTo create a Spotify playlist, you need a personal Spotify access token.');
+        logger.info('Get your token here: https://developer.spotify.com/tools/web-playback-tester');
+        logger.info('(Log in with your Spotify account, scroll down to "Copy Your Access Token")');
+        const spotifyAccessToken = await prompt(rl, '\\nPaste your Spotify access token (or press Enter to skip): ');
+        
+        if (spotifyAccessToken) {
+          await createSpotifyPlaylist(playlistName, playlistData, spotifyAccessToken);
+        } else {
+          logger.info('Skipping playlist creation');
+        }
+      } catch (err) {
+        logger.error(`Error during playlist creation prompt: ${err.message}`);
+      }
+    }
+
     return playlistData;
   } catch (err) {
     logger.error(`Failed to match Spotify songs: ${err.message}`);
+  }
+}
+
+async function createSpotifyPlaylist(playlistName, playlistData, spotifyAccessToken) {
+  try {
+    logger.info(`\\nCreating Spotify playlist: "${playlistName}"`);
+
+    // Create the playlist using the user's access token
+    const playlistResponse = await spotifyClient.createPlaylistAsUser(spotifyAccessToken, playlistName, true);
+
+    if (!playlistResponse || !playlistResponse.id) {
+      logger.error('Failed to create playlist: invalid response');
+      return;
+    }
+
+    // Extract track URIs from playlistData, preserving order
+    const trackUris = playlistData.map(entry => entry.spotifyUri);
+
+    // Add tracks to the playlist
+    await spotifyClient.addTracksToPlaylist(playlistResponse.id, trackUris);
+
+    // Log success with playlist URL
+    const playlistUrl = `https://open.spotify.com/playlist/${playlistResponse.id}`;
+    logger.info(`\\n✓ Playlist created successfully!`);
+    logger.info(`  Playlist: "${playlistName}"`);
+    logger.info(`  URL: ${playlistUrl}`);
+    logger.info(`  Tracks: ${trackUris.length} songs added in setlist order`);
+
+  } catch (err) {
+    logger.error(`Failed to create Spotify playlist: ${err.message}`);
+    logger.info('You can create the playlist manually in Spotify using the matched songs above.');
   }
 }
