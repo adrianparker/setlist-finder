@@ -162,17 +162,6 @@ export function validatePerformanceDate(date) {
   return value;
 }
 
-/**
- * Convert a setlist.fm event date (dd-MM-yyyy) to YYYYMMDD
- */
-export function setlistDateToPerformanceDate(eventDate) {
-  const match = String(eventDate ?? '').match(/^(\d{2})-(\d{2})-(\d{4})$/);
-  if (!match) {
-    throw new Error(`Unrecognised setlist.fm event date "${eventDate}"`);
-  }
-  return validatePerformanceDate(`${match[3]}${match[2]}${match[1]}`);
-}
-
 function validatePerformer(performer) {
   const value = String(performer ?? '').trim();
   if (!value) {

@@ -9,7 +9,6 @@ import {
   formatMatchTable,
   buildPlaylistTitle,
   buildPlaylistDescription,
-  setlistDateToPerformanceDate,
   buildActualDescription,
   createPlaylistFromMatches,
   findShowPlaylist,
@@ -226,16 +225,6 @@ describe('playlistBuilder', () => {
 
     it('should require a performer', () => {
       expect(() => buildPlaylistDescription('')).to.throw('Performer is required');
-    });
-  });
-
-  describe('setlistDateToPerformanceDate', () => {
-    it('should convert a setlist.fm dd-MM-yyyy date to YYYYMMDD', () => {
-      expect(setlistDateToPerformanceDate('29-10-2026')).to.equal('20261029');
-    });
-
-    it('should reject other formats', () => {
-      expect(() => setlistDateToPerformanceDate('2026-10-29')).to.throw('Unrecognised');
     });
   });
 
