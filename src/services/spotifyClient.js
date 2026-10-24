@@ -30,8 +30,13 @@ export class SpotifyRateLimitError extends Error {
 }
 
 export class SpotifyClient {
-  constructor(logger) {
+  /**
+   * @param {Object} logger - Logger instance
+   * @param {Object} options - { searchCache }: optional SearchCache for track searches
+   */
+  constructor(logger, options = {}) {
     this.logger = logger;
+    this.searchCache = options.searchCache || null;
     this.clientId = process.env.SPOTIFY_CLIENT_ID;
     this.clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
     this.accessToken = null;
@@ -117,10 +122,16 @@ export class SpotifyClient {
         return [];
       }
 
-      const token = await this.getAccessToken();
-
       // Build query with field filters: artist:name track:name
       const query = `artist:${artistName} track:${cleanSearchTerm(songName)}`;
+
+      const cached = this.searchCache?.get(query);
+      if (cached) {
+        this.logger.debug(`Spotify search from cache: "${query}"`);
+        return cached;
+      }
+
+      const token = await this.getAccessToken();
       const tracks = await this.searchTrackPages(token, query);
 
       try {
@@ -131,7 +142,7 @@ export class SpotifyClient {
       }
 
       const seen = new Set();
-      return tracks
+      const results = tracks
         .filter(track => !seen.has(track.id) && seen.add(track.id))
         .map(track => ({
           id: track.id,
@@ -148,6 +159,10 @@ export class SpotifyClient {
             images: track.album.images || []
           }
         }));
+
+      // Only complete, successful searches are cached
+      this.searchCache?.set(query, results);
+      return results;
     } catch (err) {
       // Pass errors on, so a failed search is never mistaken for a song with no match
       this.logger.error(`Spotify search failed for "${artistName} - ${songName}": ${err.message}`);

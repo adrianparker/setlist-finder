@@ -322,6 +322,55 @@ describe('SpotifyClient', () => {
     });
   });
 
+  describe('search cache', () => {
+    const item = id => ({
+      id,
+      name: 'Test Song',
+      uri: `spotify:track:${id}`,
+      explicit: false,
+      artists: [{ name: 'Test Artist', id: 'artist-1' }],
+      album: { id: `album-${id}`, name: 'Album', album_type: 'album', release_date: '2020-01-01', images: [] }
+    });
+    const page = items => ({ ok: true, status: 200, json: sinon.stub().resolves({ tracks: { items } }) });
+    let cache;
+
+    beforeEach(() => {
+      const store = new Map();
+      cache = {
+        get: sinon.stub().callsFake(key => store.get(key)),
+        set: sinon.stub().callsFake((key, value) => store.set(key, value))
+      };
+      client = new SpotifyClient(logger, { searchCache: cache });
+      client.accessToken = 'cached-token';
+      client.tokenExpiry = Date.now() + 100000;
+    });
+
+    it('should search Spotify once and answer the same query from the cache', async () => {
+      fetchStub.onFirstCall().resolves(page([item('studio')]));
+      fetchStub.onSecondCall().resolves(page([item('live')]));
+
+      const first = await client.searchTracks('Test Artist', 'Test Song');
+      const second = await client.searchTracks('Test Artist', 'Test Song');
+
+      expect(fetchStub.callCount).to.equal(2);
+      expect(second).to.deep.equal(first);
+      expect(cache.set.calledOnceWith('artist:Test Artist track:Test Song')).to.be.true;
+      expect(logger.debug.calledWithMatch('from cache')).to.be.true;
+    });
+
+    it('should not cache a failed search', async () => {
+      fetchStub.resolves({ ok: false, status: 500, statusText: 'Server Error' });
+
+      try {
+        await client.searchTracks('Test Artist', 'Test Song');
+      } catch {
+        // expected
+      }
+
+      expect(cache.set.called).to.be.false;
+    });
+  });
+
   describe('rate limits', () => {
     const limited = retryAfter => ({
       ok: false,

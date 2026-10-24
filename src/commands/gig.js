@@ -1,6 +1,7 @@
 import { MusicBrainzClient } from '../services/musicBrainzClient.js';
 import { SetlistFmClient } from '../services/setlistFmClient.js';
 import { SpotifyClient } from '../services/spotifyClient.js';
+import { SearchCache } from '../services/searchCache.js';
 import { SpotifyAuth } from '../services/spotifyAuth.js';
 import { SpotifyMatcher } from '../services/spotifyMatcher.js';
 import { Logger } from '../services/logger.js';
@@ -24,7 +25,7 @@ function createDefaultDeps() {
     logger,
     mbClient: new MusicBrainzClient(logger),
     setlistClient: new SetlistFmClient(logger),
-    spotifyClient: new SpotifyClient(logger),
+    spotifyClient: new SpotifyClient(logger, { searchCache: new SearchCache(logger) }),
     matcher: new SpotifyMatcher(logger),
     auth: new SpotifyAuth(logger),
     output: (text) => console.log(text)

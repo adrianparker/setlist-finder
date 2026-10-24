@@ -143,3 +143,6 @@ vite.config.ts.timestamp-*
 
 # macOS Finder metadata
 .DS_Store
+
+# Spotify search results cache (setlist-finder)
+.spotify-search-cache.json
