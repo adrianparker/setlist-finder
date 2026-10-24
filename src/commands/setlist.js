@@ -3,10 +3,14 @@ import { SetlistFmClient } from '../services/setlistFmClient.js';
 import { SpotifyClient } from '../services/spotifyClient.js';
 import { SpotifyMatcher } from '../services/spotifyMatcher.js';
 import { parseSetlistSongs } from '../services/setlistParser.js';
+import { SpotifyAuth } from '../services/spotifyAuth.js';
 import {
+  matchSongs,
+  formatMatchTable,
   buildPlaylistTitle,
   buildPlaylistDescription,
-  setlistDateToPerformanceDate
+  setlistDateToPerformanceDate,
+  createPlaylistFromMatches
 } from '../services/playlistBuilder.js';
 import { Logger } from '../services/logger.js';
 import readline from 'readline';
@@ -21,6 +25,31 @@ try {
   logger.warn(`Spotify client initialization failed: ${err.message}`);
 }
 const spotifyMatcher = new SpotifyMatcher(logger);
+
+async function createPlaylistForSetlist(setlistResponse, rl) {
+  if (!spotifyClient) {
+    logger.warn('Spotify client not available, skipping song matching');
+    return;
+  }
+
+  try {
+    await buildSetlistPlaylist(setlistResponse, {
+      logger,
+      spotifyClient,
+      matcher: spotifyMatcher,
+      auth: new SpotifyAuth(logger),
+      output: (text) => console.log(text),
+      // Close the prompt once answered so Spotify sign-in can read the terminal if needed
+      confirm: async (question) => {
+        const answer = await prompt(rl, question);
+        rl.close();
+        return answer;
+      }
+    });
+  } catch (err) {
+    logger.error(`Failed to create Spotify playlist: ${err.message}`);
+  }
+}
 
 function createReadlineInterface() {
   return readline.createInterface({
@@ -113,7 +142,7 @@ export async function setlist() {
 
         if (setlistResponse) {
           displaySetlist(setlistResponse);
-          await findSpotifySongs(setlistResponse, rl);
+          await createPlaylistForSetlist(setlistResponse, rl);
         } else {
           logger.info(`No setlist content for ID: ${matchingSetlists}`);
         }
@@ -149,128 +178,52 @@ function displaySetlist(setlistResponse) {
   return summary;
 }
 
-async function findSpotifySongs(setlistResponse, rl) {
-  if (!spotifyClient) {
-    logger.warn('Spotify client not available, skipping song matching');
-    return;
+/**
+ * Match a setlist's songs to Spotify, print the matches and, if confirmed, create a playlist
+ * in the signed-in user's account titled "YYYYMMDD performer - predicted setlist".
+ * @param {Object} setlistResponse - setlist from setlist.fm
+ * @param {Object} deps - { logger, spotifyClient, matcher, auth, output, confirm }
+ * @returns {Promise<Object|null>} { results, playlist } or null when nothing was matched
+ */
+export async function buildSetlistPlaylist(setlistResponse, deps) {
+  const { logger } = deps;
+  const performer = setlistResponse.artist?.name;
+  const name = buildPlaylistTitle(setlistDateToPerformanceDate(setlistResponse.eventDate), performer);
+  const description = buildPlaylistDescription(performer);
+
+  const parsed = parseSetlistSongs(setlistResponse);
+  const songs = parsed.filter(song => !song.isTape);
+  const tapesSkipped = parsed.length - songs.length;
+  if (tapesSkipped > 0) {
+    logger.debug(`Skipping ${tapesSkipped} tape(s)`);
   }
 
-  try {
-    logger.info('Matching setlist songs with Spotify...');
-    const songs = parseSetlistSongs(setlistResponse);
-    
-    if (songs.length === 0) {
-      logger.info('No songs found to match');
-      return;
-    }
-
-    logger.info(`Found ${songs.length} song(s) in setlist`);
-
-    const playlistData = [];
-    let matched = 0;
-    let unmatched = 0;
-    let tapeSkipped = 0;
-
-    for (const song of songs) {
-      if (song.isTape) {
-        logger.debug(`Skipping tape: ${song.songName}`);
-        tapeSkipped++;
-        continue;
-      }
-
-      try {
-        const spotifyTracks = await spotifyClient.searchTracks(song.artistName, song.songName);
-        const bestMatch = spotifyMatcher.findBestMatch(spotifyTracks, song.songName, song.artistName);
-
-        if (bestMatch) {
-          const playlistEntry = {
-            songName: song.songName,
-            artistName: song.artistName,
-            setNumber: song.setNumber,
-            isEncoreSet: song.isEncoreSet,
-            spotifyId: bestMatch.id,
-            spotifyUri: bestMatch.uri,
-            spotifyName: bestMatch.name,
-            album: bestMatch.album.name,
-            releaseDate: bestMatch.album.releaseDate,
-            popularity: bestMatch.popularity,
-            explicit: bestMatch.explicit
-          };
-          playlistData.push(playlistEntry);
-          matched++;
-
-          logger.info(
-            `✓ ${song.songName} | Album: ${bestMatch.album.name} | ${bestMatch.album.releaseDate} | Spotify ID: ${bestMatch.id}`
-          );
-        } else {
-          unmatched++;
-          logger.warn(`✗ No Spotify match found for: ${song.artistName} - ${song.songName}`);
-        }
-      } catch (err) {
-        unmatched++;
-        logger.error(`Error matching song "${song.songName}": ${err.message}`);
-      }
-    }
-
-    logger.info(
-      `Total songs: ${songs.length} | ` +
-      `Matched: ${matched} | ` +
-      `Unmatched: ${unmatched}` +
-      (tapeSkipped > 0 ? ` | Tapes skipped: ${tapeSkipped}` : '')
-    );
-
-    // Attempt to create Spotify playlist if we have matched songs
-    if (playlistData.length > 0 && rl) {
-      try {
-        logger.info('To create a Spotify playlist, you need a personal Spotify access token.');
-        logger.info('Get your token here: https://developer.spotify.com/tools/web-playback-tester');
-        logger.info('(Log in with your Spotify account, scroll down to "Copy Your Access Token")');
-        const spotifyAccessToken = await prompt(rl, 'Paste your Spotify access token (or press Enter to skip): ');
-        
-        if (spotifyAccessToken) {
-          const performer = setlistResponse.artist?.name;
-          const playlistName = buildPlaylistTitle(setlistDateToPerformanceDate(setlistResponse.eventDate), performer);
-          await createSpotifyPlaylist(playlistName, buildPlaylistDescription(performer), playlistData, spotifyAccessToken);
-        } else {
-          logger.info('Skipping playlist creation');
-        }
-      } catch (err) {
-        logger.error(`Error during playlist creation prompt: ${err.message}`);
-      }
-    }
-
-    return playlistData;
-  } catch (err) {
-    logger.error(`Failed to match Spotify songs: ${err.message}`);
+  if (songs.length === 0) {
+    logger.info('No songs found to match');
+    return null;
   }
-}
 
-async function createSpotifyPlaylist(playlistName, description, playlistData, spotifyAccessToken) {
-  try {
-    logger.info(`Creating Spotify playlist: "${playlistName}"`);
+  logger.info(`Matching ${songs.length} setlist song(s) with Spotify...`);
+  const results = await matchSongs(deps, performer, songs.map(song => ({
+    name: song.songName,
+    note: song.isEncoreSet ? 'encore' : ''
+  })));
+  deps.output(`\n${formatMatchTable(results)}\n`);
 
-    // Create the playlist using the user's access token
-    const playlistResponse = await spotifyClient.createPlaylist(spotifyAccessToken, playlistName, { isPublic: true, description });
-
-    if (!playlistResponse || !playlistResponse.id) {
-      logger.error('Failed to create playlist: invalid response');
-      return;
-    }
-
-    // Extract track URIs from playlistData, preserving order
-    const trackUris = playlistData.map(entry => entry.spotifyUri);
-
-    // Add tracks to the playlist
-    await spotifyClient.addTracksToPlaylist(spotifyAccessToken, playlistResponse.id, trackUris);
-
-    // Log success with playlist URL
-    const playlistUrl = `https://open.spotify.com/playlist/${playlistResponse.id}`;
-    logger.info(`Playlist created successfully!`);
-    logger.info(`  Playlist: "${playlistName}"`);
-    logger.info(`  URL: ${playlistUrl}`);
-
-  } catch (err) {
-    logger.error(`Failed to create Spotify playlist: ${err.message}`);
-    logger.info('You can create the playlist manually in Spotify using the matched songs above.');
+  if (!results.some(result => result.uri)) {
+    logger.warn('No songs matched on Spotify, so no playlist can be created');
+    return { results, playlist: null };
   }
+
+  const answer = await deps.confirm(`Create Spotify playlist "${name}"? (y/N): `);
+  if (!/^y(es)?$/i.test(answer || '')) {
+    logger.info('Skipping playlist creation');
+    return { results, playlist: null };
+  }
+
+  const userAccessToken = await deps.auth.getUserAccessToken();
+  const created = await createPlaylistFromMatches(deps, userAccessToken, { name, description, isPublic: true }, results);
+  logger.info(`Playlist "${created.name}" created with ${created.tracksAdded} track(s)`);
+  logger.info(`URL: ${created.externalUrl}`);
+  return { results, playlist: created };
 }
