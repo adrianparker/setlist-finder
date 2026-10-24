@@ -99,6 +99,22 @@ describe('SetlistFmClient', () => {
       expect(mockLogger.info.calledWith(`Setlist.fm API Request: GET https://api.setlist.fm/rest/1.0/search/setlists?artistMbid=${mbid}&cityName=${city}`)).to.be.true;
     });
 
+    it('should request a later page of results when asked', async function() {
+      this.timeout(timeout);
+      const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';
+
+      fetchStub.resolves({
+        ok: true,
+        json: sinon.stub().resolves({ setlist: [] })
+      });
+
+      await client.searchSetlistsByArtist(mbid, null, 3);
+
+      const url = new URL(fetchStub.firstCall.args[0]);
+      expect(url.searchParams.get('p')).to.equal('3');
+      expect(url.searchParams.has('cityName')).to.be.false;
+    });
+
     it('should throw error on failed API response', async function() {
       this.timeout(timeout);
       const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';

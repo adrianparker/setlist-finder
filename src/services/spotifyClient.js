@@ -183,6 +183,108 @@ export class SpotifyClient {
   }
 
   /**
+   * Send a request with a user access token and return the parsed JSON body (null if empty)
+   * @private
+   */
+  async userRequest(userAccessToken, method, url, body) {
+    if (!userAccessToken) {
+      throw new Error('User access token is required');
+    }
+
+    this.logger.debug(`Spotify API request: ${method} ${url}`);
+    const options = { method, headers: { 'Authorization': `Bearer ${userAccessToken}` } };
+    if (body !== undefined) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+
+    const response = await fetch(url, options);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData.error?.message || response.statusText;
+      throw new Error(`HTTP ${response.status}: ${errorMessage}`);
+    }
+
+    // Some endpoints, such as changing playlist details, return an empty body
+    return response.json ? response.json().catch(() => null) : null;
+  }
+
+  /**
+   * Get the signed-in user's Spotify ID (GET /me)
+   */
+  async getCurrentUser(userAccessToken) {
+    const data = await this.userRequest(userAccessToken, 'GET', 'https://api.spotify.com/v1/me');
+    return { id: data.id, displayName: data.display_name };
+  }
+
+  /**
+   * List every playlist in the signed-in user's library (GET /me/playlists), 50 per page
+   */
+  async listMyPlaylists(userAccessToken) {
+    const playlists = [];
+    let url = 'https://api.spotify.com/v1/me/playlists?limit=50';
+    while (url) {
+      const data = await this.userRequest(userAccessToken, 'GET', url);
+      for (const playlist of data.items || []) {
+        if (!playlist) continue;
+        playlists.push({
+          id: playlist.id,
+          name: playlist.name,
+          description: playlist.description || '',
+          isPublic: playlist.public,
+          ownerId: playlist.owner?.id,
+          externalUrl: playlist.external_urls?.spotify || `https://open.spotify.com/playlist/${playlist.id}`
+        });
+      }
+      url = data.next;
+    }
+    this.logger.debug(`Found ${playlists.length} playlist(s) in the user's library`);
+    return playlists;
+  }
+
+  /**
+   * Change a playlist's name and description, and its visibility only when isPublic is given
+   * (PUT /playlists/{id})
+   */
+  async updatePlaylistDetails(userAccessToken, playlistId, { name, description, isPublic } = {}) {
+    const body = { name, description };
+    if (isPublic !== undefined) body.public = isPublic;
+    await this.userRequest(userAccessToken, 'PUT', `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`, body);
+    this.logger.info(`Playlist details updated: "${name}" (ID: ${playlistId})`);
+  }
+
+  /**
+   * Read the URIs of a playlist's tracks in order (GET /playlists/{id}/items), 50 per page
+   */
+  async getPlaylistTrackUris(userAccessToken, playlistId) {
+    const uris = [];
+    let url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items?limit=50`;
+    while (url) {
+      const data = await this.userRequest(userAccessToken, 'GET', url);
+      for (const entry of data.items || []) {
+        // "item" replaced the deprecated "track" field; local or removed tracks may be null
+        const uri = (entry?.item || entry?.track)?.uri;
+        if (uri) uris.push(uri);
+      }
+      url = data.next;
+    }
+    return uris;
+  }
+
+  /**
+   * Replace all of a playlist's tracks, keeping its ID (PUT /playlists/{id}/items).
+   * PUT takes at most 100 URIs, so any beyond that are appended in order.
+   */
+  async replacePlaylistTracks(userAccessToken, playlistId, trackUris) {
+    const url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items`;
+    await this.userRequest(userAccessToken, 'PUT', url, { uris: trackUris.slice(0, 100) });
+    for (let i = 100; i < trackUris.length; i += 100) {
+      await this.userRequest(userAccessToken, 'POST', url, { uris: trackUris.slice(i, i + 100) });
+    }
+    this.logger.info(`Replaced playlist ${playlistId} tracks with ${trackUris.length} track(s)`);
+  }
+
+  /**
    * Append tracks to a playlist in order (POST /playlists/{id}/items), 100 per request.
    * Requires a user access token from SpotifyAuth.
    */

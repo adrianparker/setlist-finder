@@ -11,7 +11,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export const SPOTIFY_AUTHORIZE_URL = 'https://accounts.spotify.com/authorize';
 export const SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token';
-export const SPOTIFY_SCOPES = ['playlist-modify-private', 'playlist-modify-public'];
+// playlist-read-private lets the app find the user's existing private playlists to update them
+export const SPOTIFY_SCOPES = ['playlist-modify-private', 'playlist-modify-public', 'playlist-read-private'];
 // Spotify no longer accepts "localhost"; loopback redirects must use an IP literal.
 export const DEFAULT_REDIRECT_URI = 'http://127.0.0.1:8888/callback';
 export const DEFAULT_TOKEN_PATH = path.join(__dirname, '../../.spotify-token.json');

@@ -81,6 +81,10 @@ export function formatMatchTable(results) {
     ['Year', 4, r => (r.releaseDate || '').slice(0, 4)]
   ];
 
+  if (results.some(r => r.note)) {
+    columns.push(['Played', 22, r => r.note]);
+  }
+
   const row = values => values.map((v, i) => fit(v, columns[i][1])).join('  ').trimEnd();
   const lines = [
     row(columns.map(([title]) => title)),
@@ -162,4 +166,84 @@ export async function createPlaylistFromMatches({ spotifyClient, logger }, userA
   logger.info(`Added ${added.tracksAdded} track(s) to "${playlist.name}"`);
 
   return { ...playlist, tracksAdded: added.tracksAdded };
+}
+
+function decodeHtmlEntities(text) {
+  return String(text ?? '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, '\'')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * Find the signed-in user's playlist for a show: one they own whose title starts with
+ * "YYYYMMDD Performer -", so it is found whether it is the predicted or actual setlist.
+ * @param {Object} deps - { spotifyClient, logger }
+ * @param {string} userAccessToken - token from SpotifyAuth
+ * @param {Object} show - { date, performer }
+ * @returns {Promise<Object|null>} the playlist, or null if there is none
+ */
+export async function findShowPlaylist({ spotifyClient, logger }, userAccessToken, { date, performer }) {
+  const prefix = `${validatePerformanceDate(date)} ${validatePerformer(performer)} -`.toLowerCase();
+  const [user, playlists] = await Promise.all([
+    spotifyClient.getCurrentUser(userAccessToken),
+    spotifyClient.listMyPlaylists(userAccessToken)
+  ]);
+
+  const matches = playlists.filter(p => p.ownerId === user.id && (p.name || '').toLowerCase().startsWith(prefix));
+  if (matches.length > 1) {
+    logger.warn(`Found ${matches.length} playlists for this show; updating the first, "${matches[0].name}" (ID: ${matches[0].id})`);
+  }
+  return matches[0] || null;
+}
+
+/**
+ * Create the show's playlist, or update the existing one in place (same Spotify ID):
+ * details change when the title, description or requested visibility differ, and tracks
+ * are replaced only when the matched tracks or their order differ.
+ * @param {Object} deps - { spotifyClient, logger }
+ * @param {string} userAccessToken - token from SpotifyAuth
+ * @param {Object} options - { date, performer, name, description, isPublic }; isPublic undefined
+ *   leaves an existing playlist's visibility alone (and creates a public one)
+ * @param {Array} results - output of matchSongs
+ * @returns {Promise<{action: string, changes: string[], playlist: Object}>}
+ *   action is 'created', 'updated' or 'unchanged'
+ */
+export async function saveShowPlaylist(deps, userAccessToken, { date, performer, name, description, isPublic }, results) {
+  const { spotifyClient, logger } = deps;
+  const uris = results.filter(r => r.uri).map(r => r.uri);
+  const existing = await findShowPlaylist(deps, userAccessToken, { date, performer });
+
+  if (!existing) {
+    const playlist = await createPlaylistFromMatches(deps, userAccessToken, { name, description, isPublic: isPublic ?? true }, results);
+    return { action: 'created', changes: [], playlist };
+  }
+
+  logger.info(`Found existing playlist "${existing.name}" (ID: ${existing.id})`);
+  const changes = [];
+
+  const detailsChanged = existing.name !== name ||
+    decodeHtmlEntities(existing.description) !== description ||
+    (isPublic !== undefined && existing.isPublic !== isPublic);
+  if (detailsChanged) {
+    await spotifyClient.updatePlaylistDetails(userAccessToken, existing.id, { name, description, isPublic });
+    changes.push('details');
+  }
+
+  const currentUris = await spotifyClient.getPlaylistTrackUris(userAccessToken, existing.id);
+  const tracksChanged = currentUris.length !== uris.length || currentUris.some((uri, i) => uri !== uris[i]);
+  if (tracksChanged) {
+    await spotifyClient.replacePlaylistTracks(userAccessToken, existing.id, uris);
+    changes.push('tracks');
+  }
+
+  return {
+    action: changes.length > 0 ? 'updated' : 'unchanged',
+    changes,
+    playlist: { ...existing, name, description, tracksAdded: uris.length }
+  };
 }

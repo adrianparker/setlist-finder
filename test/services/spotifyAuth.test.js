@@ -108,7 +108,7 @@ describe('SpotifyAuth', () => {
       expect(url.searchParams.get('code_challenge_method')).to.equal('S256');
       expect(url.searchParams.get('code_challenge')).to.equal('challenge-abc');
       expect(url.searchParams.get('state')).to.equal('state-xyz');
-      expect(url.searchParams.get('scope')).to.equal('playlist-modify-private playlist-modify-public');
+      expect(url.searchParams.get('scope')).to.equal('playlist-modify-private playlist-modify-public playlist-read-private');
     });
   });
 
@@ -358,7 +358,7 @@ describe('SpotifyAuth', () => {
   });
 
   describe('getUserAccessToken', () => {
-    const scope = 'playlist-modify-private playlist-modify-public';
+    const scope = 'playlist-modify-private playlist-modify-public playlist-read-private';
 
     it('should return a stored token that has not expired', async () => {
       auth.saveTokens({ accessToken: 'stored', refreshToken: 'r', scope, expiresAt: Date.now() + 3600000 });
@@ -400,6 +400,13 @@ describe('SpotifyAuth', () => {
         expect(loginStub.called).to.be.false;
         expect(auth.loadTokens().refreshToken).to.equal('refresh-1');
       }
+    });
+
+    it('should sign in again when stored tokens predate the playlist-read-private scope', async () => {
+      auth.saveTokens({ accessToken: 'stored', refreshToken: 'r', scope: 'playlist-modify-private playlist-modify-public', expiresAt: Date.now() + 3600000 });
+      sinon.stub(auth, 'login').resolves({ accessToken: 'fresh' });
+
+      expect(await auth.getUserAccessToken()).to.equal('fresh');
     });
 
     it('should sign in when stored tokens lack the playlist scopes', async () => {

@@ -325,6 +325,103 @@ describe('SpotifyClient', () => {
     });
   });
 
+  describe('user playlist management', () => {
+    const ok = body => ({ ok: true, status: 200, json: sinon.stub().resolves(body) });
+
+    beforeEach(() => {
+      client = new SpotifyClient(logger);
+    });
+
+    it('should get the signed-in user', async () => {
+      fetchStub.resolves(ok({ id: 'adrian', display_name: 'Adrian' }));
+
+      const user = await client.getCurrentUser('user-token');
+
+      expect(fetchStub.firstCall.args[0]).to.equal('https://api.spotify.com/v1/me');
+      expect(fetchStub.firstCall.args[1].headers.Authorization).to.equal('Bearer user-token');
+      expect(user).to.deep.equal({ id: 'adrian', displayName: 'Adrian' });
+    });
+
+    it('should list all the user\'s playlists across pages', async () => {
+      fetchStub.onFirstCall().resolves(ok({
+        items: [{ id: 'p1', name: 'One', description: 'd1', public: true, owner: { id: 'adrian' }, external_urls: { spotify: 'https://open.spotify.com/playlist/p1' } }],
+        next: 'https://api.spotify.com/v1/me/playlists?offset=50&limit=50'
+      }));
+      fetchStub.onSecondCall().resolves(ok({
+        items: [{ id: 'p2', name: 'Two', description: '', public: false, owner: { id: 'someone' } }],
+        next: null
+      }));
+
+      const playlists = await client.listMyPlaylists('user-token');
+
+      expect(fetchStub.firstCall.args[0]).to.equal('https://api.spotify.com/v1/me/playlists?limit=50');
+      expect(fetchStub.secondCall.args[0]).to.equal('https://api.spotify.com/v1/me/playlists?offset=50&limit=50');
+      expect(playlists).to.deep.equal([
+        { id: 'p1', name: 'One', description: 'd1', isPublic: true, ownerId: 'adrian', externalUrl: 'https://open.spotify.com/playlist/p1' },
+        { id: 'p2', name: 'Two', description: '', isPublic: false, ownerId: 'someone', externalUrl: 'https://open.spotify.com/playlist/p2' }
+      ]);
+    });
+
+    it('should change playlist details', async () => {
+      fetchStub.resolves({ ok: true, status: 200, json: sinon.stub().rejects(new Error('empty body')) });
+
+      await client.updatePlaylistDetails('user-token', 'p1', { name: 'New', description: 'Desc', isPublic: false });
+
+      const [url, options] = fetchStub.firstCall.args;
+      expect(url).to.equal('https://api.spotify.com/v1/playlists/p1');
+      expect(options.method).to.equal('PUT');
+      expect(JSON.parse(options.body)).to.deep.equal({ name: 'New', description: 'Desc', public: false });
+    });
+
+    it('should leave visibility alone when not given', async () => {
+      fetchStub.resolves({ ok: true, status: 200 });
+
+      await client.updatePlaylistDetails('user-token', 'p1', { name: 'New', description: 'Desc' });
+
+      expect(JSON.parse(fetchStub.firstCall.args[1].body)).to.deep.equal({ name: 'New', description: 'Desc' });
+    });
+
+    it('should read a playlist\'s track URIs in order across pages', async () => {
+      fetchStub.onFirstCall().resolves(ok({
+        items: [{ item: { uri: 'spotify:track:a' } }, { item: null }, { track: { uri: 'spotify:track:b' } }],
+        next: 'https://api.spotify.com/v1/playlists/p1/items?offset=50&limit=50'
+      }));
+      fetchStub.onSecondCall().resolves(ok({ items: [{ item: { uri: 'spotify:track:c' } }], next: null }));
+
+      const uris = await client.getPlaylistTrackUris('user-token', 'p1');
+
+      expect(fetchStub.firstCall.args[0]).to.equal('https://api.spotify.com/v1/playlists/p1/items?limit=50');
+      expect(uris).to.deep.equal(['spotify:track:a', 'spotify:track:b', 'spotify:track:c']);
+    });
+
+    it('should replace a playlist\'s tracks, adding any beyond 100 in order', async () => {
+      fetchStub.resolves(ok({ snapshot_id: 's' }));
+      const uris = Array.from({ length: 130 }, (_, i) => `spotify:track:${i}`);
+
+      await client.replacePlaylistTracks('user-token', 'p1', uris);
+
+      const [putUrl, put] = fetchStub.firstCall.args;
+      expect(putUrl).to.equal('https://api.spotify.com/v1/playlists/p1/items');
+      expect(put.method).to.equal('PUT');
+      expect(JSON.parse(put.body).uris).to.deep.equal(uris.slice(0, 100));
+      const [postUrl, post] = fetchStub.secondCall.args;
+      expect(postUrl).to.equal('https://api.spotify.com/v1/playlists/p1/items');
+      expect(post.method).to.equal('POST');
+      expect(JSON.parse(post.body).uris).to.deep.equal(uris.slice(100));
+    });
+
+    it('should report API errors with the Spotify message', async () => {
+      fetchStub.resolves({ ok: false, status: 403, statusText: 'Forbidden', json: sinon.stub().resolves({ error: { message: 'Insufficient client scope' } }) });
+
+      try {
+        await client.listMyPlaylists('user-token');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err.message).to.equal('HTTP 403: Insufficient client scope');
+      }
+    });
+  });
+
   describe('addTracksToPlaylist', () => {
     beforeEach(() => {
       client = new SpotifyClient(logger);

@@ -10,12 +10,21 @@ export class SetlistFmClient {
     this.apiKey = process.env.SETLISTFM_API_KEY;
   }
   
-  async searchSetlistsByArtist(mbid, city = null) {
+  /**
+   * Search an artist's setlists, newest first, 20 per page
+   * @param {string} mbid - MusicBrainz artist ID
+   * @param {string|null} city - optional city name filter
+   * @param {number} page - result page, starting at 1
+   */
+  async searchSetlistsByArtist(mbid, city = null, page = 1) {
     const url = new URL(`${this.baseUrl}/search/setlists`);
     url.searchParams.append('artistMbid', mbid);
     if (city) {
       url.searchParams.append('cityName', city);
-    }    
+    }
+    if (page > 1) {
+      url.searchParams.append('p', String(page));
+    }
     return await this.doFetch(url);
   }
 

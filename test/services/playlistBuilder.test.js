@@ -10,6 +10,8 @@ import {
   buildPlaylistDescription,
   setlistDateToPerformanceDate,
   createPlaylistFromMatches,
+  findShowPlaylist,
+  saveShowPlaylist,
   MATCH_TYPE
 } from '../../src/services/playlistBuilder.js';
 
@@ -208,6 +210,145 @@ describe('playlistBuilder', () => {
         expect(err.message).to.include('No matched tracks');
         expect(spotifyClient.createPlaylist.called).to.be.false;
       }
+    });
+  });
+
+  describe('formatMatchTable notes column', () => {
+    it('should add a Played column when songs have notes', () => {
+      const table = formatMatchTable([result(1, MATCH_TYPE.LIVE, { note: 'every show' })]);
+      const lines = table.split('\n');
+
+      expect(lines[0]).to.match(/Year\s+Played$/);
+      expect(lines[2]).to.match(/every show$/);
+    });
+  });
+
+  describe('show playlists', () => {
+    const show = { date: '20261029', performer: 'Mudhoney' };
+    const owned = (id, name, extra = {}) => ({
+      id, name, description: '', isPublic: true, ownerId: 'adrian', externalUrl: `https://open.spotify.com/playlist/${id}`, ...extra
+    });
+
+    beforeEach(() => {
+      spotifyClient.getCurrentUser = sinon.stub().resolves({ id: 'adrian' });
+      spotifyClient.listMyPlaylists = sinon.stub().resolves([]);
+      spotifyClient.updatePlaylistDetails = sinon.stub().resolves();
+      spotifyClient.getPlaylistTrackUris = sinon.stub().resolves([]);
+      spotifyClient.replacePlaylistTracks = sinon.stub().resolves();
+    });
+
+    describe('findShowPlaylist', () => {
+      it('should find the user\'s playlist whose title starts with "YYYYMMDD Performer -", predicted or actual', async () => {
+        spotifyClient.listMyPlaylists.resolves([
+          owned('other', 'Road trip'),
+          owned('other-date', '20261030 Mudhoney - predicted setlist'),
+          owned('mine', '20261029 mudhoney - actual setlist')
+        ]);
+
+        const found = await findShowPlaylist({ spotifyClient, logger }, 'user-token', show);
+
+        expect(found.id).to.equal('mine');
+      });
+
+      it('should ignore playlists owned by someone else', async () => {
+        spotifyClient.listMyPlaylists.resolves([owned('theirs', '20261029 Mudhoney - predicted setlist', { ownerId: 'someone' })]);
+
+        expect(await findShowPlaylist({ spotifyClient, logger }, 'user-token', show)).to.be.null;
+      });
+
+      it('should not match a different performer whose name starts the same', async () => {
+        spotifyClient.listMyPlaylists.resolves([owned('x', '20261029 Mudhoney Tribute - predicted setlist')]);
+
+        expect(await findShowPlaylist({ spotifyClient, logger }, 'user-token', show)).to.be.null;
+      });
+
+      it('should use the first match and warn when there are several', async () => {
+        spotifyClient.listMyPlaylists.resolves([
+          owned('first', '20261029 Mudhoney - predicted setlist'),
+          owned('second', '20261029 Mudhoney - predicted setlist')
+        ]);
+
+        const found = await findShowPlaylist({ spotifyClient, logger }, 'user-token', show);
+
+        expect(found.id).to.equal('first');
+        expect(logger.warn.calledWithMatch('2 playlists')).to.be.true;
+      });
+    });
+
+    describe('saveShowPlaylist', () => {
+      const details = { ...show, name: '20261029 Mudhoney - predicted setlist', description: 'The most likely setlist for Mudhoney for their upcoming show.' };
+      const matches = [result(1, MATCH_TYPE.LIVE), result(2, MATCH_TYPE.NO_MATCH), result(3, MATCH_TYPE.STUDIO)];
+
+      it('should create the playlist when none exists', async () => {
+        spotifyClient.createPlaylist.resolves({ id: 'new', name: details.name, uri: 'spotify:playlist:new', externalUrl: 'https://open.spotify.com/playlist/new' });
+        spotifyClient.addTracksToPlaylist.resolves({ tracksAdded: 2, batches: 1, snapshotId: 's' });
+
+        const saved = await saveShowPlaylist({ spotifyClient, logger }, 'user-token', { ...details, isPublic: true }, matches);
+
+        expect(saved.action).to.equal('created');
+        expect(spotifyClient.createPlaylist.calledOnceWith('user-token', details.name, { isPublic: true, description: details.description })).to.be.true;
+        expect(spotifyClient.addTracksToPlaylist.calledOnceWith('user-token', 'new', ['spotify:track:t1', 'spotify:track:t3'])).to.be.true;
+        expect(saved.playlist.externalUrl).to.equal('https://open.spotify.com/playlist/new');
+      });
+
+      it('should do nothing when the existing playlist already matches', async () => {
+        spotifyClient.listMyPlaylists.resolves([owned('p1', details.name, { description: details.description })]);
+        spotifyClient.getPlaylistTrackUris.resolves(['spotify:track:t1', 'spotify:track:t3']);
+
+        const saved = await saveShowPlaylist({ spotifyClient, logger }, 'user-token', details, matches);
+
+        expect(saved.action).to.equal('unchanged');
+        expect(saved.playlist.id).to.equal('p1');
+        expect(spotifyClient.updatePlaylistDetails.called).to.be.false;
+        expect(spotifyClient.replacePlaylistTracks.called).to.be.false;
+        expect(spotifyClient.createPlaylist.called).to.be.false;
+      });
+
+      it('should replace the tracks in place when they or their order changed', async () => {
+        spotifyClient.listMyPlaylists.resolves([owned('p1', details.name, { description: details.description })]);
+        spotifyClient.getPlaylistTrackUris.resolves(['spotify:track:t3', 'spotify:track:t1']);
+
+        const saved = await saveShowPlaylist({ spotifyClient, logger }, 'user-token', details, matches);
+
+        expect(saved.action).to.equal('updated');
+        expect(saved.changes).to.deep.equal(['tracks']);
+        expect(spotifyClient.replacePlaylistTracks.calledOnceWith('user-token', 'p1', ['spotify:track:t1', 'spotify:track:t3'])).to.be.true;
+        expect(spotifyClient.updatePlaylistDetails.called).to.be.false;
+      });
+
+      it('should rename the playlist in place, e.g. from predicted to actual', async () => {
+        spotifyClient.listMyPlaylists.resolves([owned('p1', '20261029 Mudhoney - predicted setlist', { description: 'old' })]);
+        spotifyClient.getPlaylistTrackUris.resolves(['spotify:track:t1', 'spotify:track:t3']);
+        const actual = { ...show, name: '20261029 Mudhoney - actual setlist', description: 'The setlist Mudhoney played.' };
+
+        const saved = await saveShowPlaylist({ spotifyClient, logger }, 'user-token', actual, matches);
+
+        expect(saved.changes).to.deep.equal(['details']);
+        expect(spotifyClient.updatePlaylistDetails.calledOnceWith('user-token', 'p1', {
+          name: actual.name, description: actual.description, isPublic: undefined
+        })).to.be.true;
+        expect(saved.playlist).to.include({ id: 'p1', name: actual.name });
+      });
+
+      it('should compare descriptions after decoding the HTML entities Spotify returns', async () => {
+        const withApostrophe = { ...show, performer: 'Guns N\' Roses', name: '20261029 Guns N\' Roses - predicted setlist', description: 'The most likely setlist for Guns N\' Roses for their upcoming show.' };
+        spotifyClient.listMyPlaylists.resolves([owned('p1', withApostrophe.name, { description: 'The most likely setlist for Guns N&#x27;  Roses for their upcoming show.'.replace('  ', ' ') })]);
+        spotifyClient.getPlaylistTrackUris.resolves(['spotify:track:t1', 'spotify:track:t3']);
+
+        const saved = await saveShowPlaylist({ spotifyClient, logger }, 'user-token', withApostrophe, matches);
+
+        expect(saved.action).to.equal('unchanged');
+      });
+
+      it('should change visibility only when asked', async () => {
+        spotifyClient.listMyPlaylists.resolves([owned('p1', details.name, { description: details.description, isPublic: true })]);
+        spotifyClient.getPlaylistTrackUris.resolves(['spotify:track:t1', 'spotify:track:t3']);
+
+        const saved = await saveShowPlaylist({ spotifyClient, logger }, 'user-token', { ...details, isPublic: false }, matches);
+
+        expect(saved.changes).to.deep.equal(['details']);
+        expect(spotifyClient.updatePlaylistDetails.firstCall.args[2].isPublic).to.be.false;
+      });
     });
   });
 });
