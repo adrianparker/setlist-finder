@@ -97,13 +97,35 @@ export function formatMatchTable(results) {
   return lines.join('\n');
 }
 
+const PLAYLIST_KINDS = ['predicted', 'actual'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
 /**
- * Build the playlist title: "YYYYMMDD performer - predicted setlist"
+ * Build the playlist title: "YYYYMMDD performer - predicted setlist" or "... - actual setlist"
  * @param {string} date - performance date as YYYYMMDD, e.g. "20261029"
  * @param {string} performer - band or artist name
+ * @param {string} kind - 'predicted' (default) or 'actual'
  */
-export function buildPlaylistTitle(date, performer) {
-  return `${validatePerformanceDate(date)} ${validatePerformer(performer)} - predicted setlist`;
+export function buildPlaylistTitle(date, performer, kind = 'predicted') {
+  if (!PLAYLIST_KINDS.includes(kind)) {
+    throw new Error(`Unknown playlist kind "${kind}"`);
+  }
+  return `${validatePerformanceDate(date)} ${validatePerformer(performer)} - ${kind} setlist`;
+}
+
+/**
+ * Build the description for an actual setlist, e.g.
+ * "The setlist Mudhoney played at The Factory Theatre, Sydney on 22 Oct 2026."
+ * @param {string} performer - band or artist name
+ * @param {string|null} venue - venue name
+ * @param {string|null} city - city name
+ * @param {string} date - performance date as YYYYMMDD
+ */
+export function buildActualDescription(performer, venue, city, date) {
+  const value = validatePerformanceDate(date);
+  const when = `${Number(value.slice(6, 8))} ${MONTHS[Number(value.slice(4, 6)) - 1]} ${value.slice(0, 4)}`;
+  const where = venue ? ` at ${[venue, city].filter(Boolean).join(', ')}` : city ? ` in ${city}` : '';
+  return `The setlist ${validatePerformer(performer)} played${where} on ${when}.`;
 }
 
 /**

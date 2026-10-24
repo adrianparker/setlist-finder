@@ -169,15 +169,6 @@ describe('gig command (predicted setlist)', () => {
     expect(process.exitCode).to.equal(1);
   });
 
-  it('should not yet handle past dates', async () => {
-    deps.today = '20261030';
-    const outcome = await gig({ performer: 'Mudhoney', date: '20261022' }, deps);
-
-    expect(outcome).to.be.null;
-    expect(deps.logger.error.calledWithMatch('not supported yet')).to.be.true;
-    expect(deps.setlistClient.searchSetlistsByArtist.called).to.be.false;
-  });
-
   it('should report an unknown performer', async () => {
     deps.mbClient.searchArtist.resolves(null);
 
@@ -195,5 +186,137 @@ describe('gig command (predicted setlist)', () => {
     expect(outcome).to.be.null;
     expect(deps.logger.error.calledWithMatch('No setlists with songs found')).to.be.true;
     expect(deps.spotifyClient.createPlaylist.called).to.be.false;
+  });
+});
+
+describe('gig command (actual setlist)', () => {
+  let deps;
+  let savedExitCode;
+  const existingPredicted = {
+    id: 'existing',
+    name: '20261022 Mudhoney - predicted setlist',
+    description: 'The most likely setlist for Mudhoney for their upcoming show.',
+    isPublic: true,
+    ownerId: 'adrian',
+    externalUrl: 'https://open.spotify.com/playlist/existing'
+  };
+
+  beforeEach(() => {
+    savedExitCode = process.exitCode;
+    const logger = { info: sinon.stub(), error: sinon.stub(), debug: sinon.stub(), warn: sinon.stub() };
+    const actual = setlist('show', '22-10-2026', ['Get Into Yours', 'If I Think'], ['Mudride']);
+    actual.venue = { name: 'The Factory Theatre', city: { name: 'Sydney', country: { name: 'Australia' } } };
+    deps = {
+      logger,
+      today: '20261025',
+      matcher: new SpotifyMatcher(logger),
+      mbClient: { searchArtist: sinon.stub().resolves({ name: 'Mudhoney', mbid: 'mbid-1' }) },
+      setlistClient: {
+        searchSetlistsByArtistOnDate: sinon.stub().resolves({ setlist: [actual] }),
+        searchSetlistsByArtist: sinon.stub().resolves({
+          total: 2,
+          itemsPerPage: 20,
+          setlist: [setlist('s1', '21-10-2026', ['If I Think'], ['Mudride']), setlist('s2', '20-10-2026', ['If I Think'], ['Mudride'])]
+        })
+      },
+      spotifyClient: {
+        searchTracks: sinon.stub().resolves([]),
+        getCurrentUser: sinon.stub().resolves({ id: 'adrian' }),
+        listMyPlaylists: sinon.stub().resolves([existingPredicted]),
+        createPlaylist: sinon.stub().resolves({
+          id: 'p-new', name: 'created', uri: 'spotify:playlist:p-new', externalUrl: 'https://open.spotify.com/playlist/p-new'
+        }),
+        addTracksToPlaylist: sinon.stub().resolves({ tracksAdded: 2, batches: 1, snapshotId: 's' }),
+        updatePlaylistDetails: sinon.stub().resolves(),
+        getPlaylistTrackUris: sinon.stub().resolves(['spotify:track:t1', 'spotify:track:t3']),
+        replacePlaylistTracks: sinon.stub().resolves()
+      },
+      auth: { getUserAccessToken: sinon.stub().resolves('user-token') },
+      output: sinon.stub()
+    };
+    deps.spotifyClient.searchTracks.withArgs('Mudhoney', 'If I Think').resolves([track('t1', 'If I Think', 'Live At El Sol')]);
+    deps.spotifyClient.searchTracks.withArgs('Mudhoney', 'Get Into Yours').resolves([track('t2', 'Get Into Yours', 'Live At El Sol')]);
+    deps.spotifyClient.searchTracks.withArgs('Mudhoney', 'Mudride').resolves([track('t3', 'Mudride', 'Live At El Sol')]);
+  });
+
+  afterEach(() => {
+    sinon.restore();
+    process.exitCode = savedExitCode;
+  });
+
+  it('should turn the predicted playlist into the actual setlist in place', async () => {
+    const outcome = await gig({ performer: 'Mudhoney', date: '20261022', city: 'Sydney' }, deps);
+
+    expect(deps.setlistClient.searchSetlistsByArtistOnDate.calledOnceWith('mbid-1', '22-10-2026', 'Sydney')).to.be.true;
+    expect(deps.setlistClient.searchSetlistsByArtist.called).to.be.false;
+    expect(outcome.kind).to.equal('actual');
+
+    expect(deps.spotifyClient.updatePlaylistDetails.calledOnceWith('user-token', 'existing', {
+      name: '20261022 Mudhoney - actual setlist',
+      description: 'The setlist Mudhoney played at The Factory Theatre, Sydney on 22 Oct 2026.',
+      isPublic: undefined
+    })).to.be.true;
+    expect(deps.spotifyClient.replacePlaylistTracks.calledOnceWith('user-token', 'existing', ['spotify:track:t2', 'spotify:track:t1', 'spotify:track:t3'])).to.be.true;
+    expect(deps.spotifyClient.createPlaylist.called).to.be.false;
+    expect(outcome.saved.action).to.equal('updated');
+
+    const table = deps.output.firstCall.args[0];
+    expect(table).to.match(/ 1\s+Get Into Yours\s+LIVE/);
+    expect(table).to.match(/ 3\s+Mudride\s+LIVE.*encore$/m);
+  });
+
+  it('should create the actual-setlist playlist when there is none', async () => {
+    deps.spotifyClient.listMyPlaylists.resolves([]);
+
+    const outcome = await gig({ performer: 'Mudhoney', date: '20261022' }, deps);
+
+    expect(deps.setlistClient.searchSetlistsByArtistOnDate.firstCall.args[2]).to.be.null;
+    expect(deps.spotifyClient.createPlaylist.firstCall.args[1]).to.equal('20261022 Mudhoney - actual setlist');
+    expect(outcome.saved.action).to.equal('created');
+  });
+
+  it('should keep the existing prediction unchanged when no setlist has been posted yet', async () => {
+    deps.setlistClient.searchSetlistsByArtistOnDate.resolves({ setlist: [] });
+
+    const outcome = await gig({ performer: 'Mudhoney', date: '20261022' }, deps);
+
+    expect(deps.logger.info.calledWithMatch('try again later')).to.be.true;
+    expect(deps.spotifyClient.updatePlaylistDetails.called).to.be.false;
+    expect(deps.spotifyClient.replacePlaylistTracks.called).to.be.false;
+    expect(deps.spotifyClient.createPlaylist.called).to.be.false;
+    expect(deps.setlistClient.searchSetlistsByArtist.called).to.be.false;
+    expect(outcome.saved.action).to.equal('unchanged');
+    expect(deps.logger.info.calledWith('URL: https://open.spotify.com/playlist/existing')).to.be.true;
+  });
+
+  it('should create a prediction when no setlist has been posted and no playlist exists', async () => {
+    deps.setlistClient.searchSetlistsByArtistOnDate.resolves({ setlist: [] });
+    deps.spotifyClient.listMyPlaylists.resolves([]);
+
+    const outcome = await gig({ performer: 'Mudhoney', date: '20261022' }, deps);
+
+    expect(outcome.kind).to.equal('predicted');
+    expect(deps.setlistClient.searchSetlistsByArtist.called).to.be.true;
+    expect(deps.spotifyClient.createPlaylist.firstCall.args[1]).to.equal('20261022 Mudhoney - predicted setlist');
+    expect(deps.logger.info.calledWithMatch('try again later')).to.be.true;
+  });
+
+  it('should show the actual setlist without signing in on --dry-run', async () => {
+    const outcome = await gig({ performer: 'Mudhoney', date: '20261022', dryRun: true }, deps);
+
+    expect(outcome.kind).to.equal('actual');
+    expect(deps.auth.getUserAccessToken.called).to.be.false;
+    expect(deps.spotifyClient.listMyPlaylists.called).to.be.false;
+    expect(outcome.saved).to.be.null;
+  });
+
+  it('should show a prediction on --dry-run when no setlist has been posted yet', async () => {
+    deps.setlistClient.searchSetlistsByArtistOnDate.resolves({ setlist: [] });
+
+    const outcome = await gig({ performer: 'Mudhoney', date: '20261022', dryRun: true }, deps);
+
+    expect(outcome.kind).to.equal('predicted');
+    expect(deps.spotifyClient.listMyPlaylists.called).to.be.false;
+    expect(deps.logger.info.calledWithMatch('try again later')).to.be.true;
   });
 });

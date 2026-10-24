@@ -5,12 +5,16 @@ import { SpotifyAuth } from '../services/spotifyAuth.js';
 import { SpotifyMatcher } from '../services/spotifyMatcher.js';
 import { Logger } from '../services/logger.js';
 import { findSourceSetlists, predictSetlist, DEFAULT_SOURCE_SHOWS } from '../services/setlistPredictor.js';
+import { findShowSetlist } from '../services/showSetlist.js';
+import { parseSetlistSongs } from '../services/setlistParser.js';
 import {
   matchSongs,
   formatMatchTable,
   buildPlaylistTitle,
   buildPlaylistDescription,
+  buildActualDescription,
   validatePerformanceDate,
+  findShowPlaylist,
   saveShowPlaylist
 } from '../services/playlistBuilder.js';
 
@@ -46,11 +50,57 @@ function parseShowCount(value) {
 }
 
 /**
- * Create or update the one Spotify playlist for a show. For today or a future date the
- * setlist is predicted from the performer's most recent earlier setlists on setlist.fm.
- * @param {Object} options - { performer, date, shows, private, dryRun } from Commander
+ * Plan a predicted setlist from the performer's most recent setlists before the show
+ * @private
+ */
+async function planPrediction(deps, artist, performer, date, showCount) {
+  const setlists = await findSourceSetlists(deps, artist.mbid, date, showCount);
+  if (setlists.length === 0) {
+    throw new Error(`No setlists with songs found for ${artist.name} before ${date}`);
+  }
+
+  const prediction = predictSetlist(setlists);
+  deps.logger.info(`Predicting from ${prediction.showCount} show(s): ` +
+    prediction.sources.map(s => `${s.eventDate} ${s.venue}, ${s.city} (${s.songCount} songs)`).join('; '));
+
+  return {
+    kind: 'predicted',
+    name: buildPlaylistTitle(date, performer, 'predicted'),
+    description: buildPlaylistDescription(performer),
+    // setlist.fm's spelling of the artist matches Spotify's more often than typed input
+    spotifyArtist: setlists[0].artist?.name || artist.name,
+    songs: prediction.songs,
+    prediction
+  };
+}
+
+/**
+ * Plan the setlist actually played, in the order played
+ * @private
+ */
+function planActual(setlist, performer, date) {
+  const songs = parseSetlistSongs(setlist)
+    .filter(song => !song.isTape)
+    .map(song => ({ name: song.songName, note: song.isEncoreSet ? 'encore' : '' }));
+
+  return {
+    kind: 'actual',
+    name: buildPlaylistTitle(date, performer, 'actual'),
+    description: buildActualDescription(performer, setlist.venue?.name, setlist.venue?.city?.name, date),
+    spotifyArtist: setlist.artist?.name || performer,
+    songs,
+    setlist
+  };
+}
+
+/**
+ * Create or update the one Spotify playlist for a show, keeping its Spotify ID throughout.
+ * Today or a future date: the setlist is predicted from the performer's most recent earlier
+ * setlists. A past date: the setlist actually played, from setlist.fm; until one is posted,
+ * the existing playlist is kept (or a prediction is created if there is none).
+ * @param {Object} options - { performer, date, city, shows, private, dryRun } from Commander
  * @param {Object} deps - injected services, for testing
- * @returns {Promise<Object|null>} { prediction, results, saved } or null on failure
+ * @returns {Promise<Object|null>} { kind, prediction, results, saved } or null on failure
  */
 export async function gig(options, deps) {
   let logger = deps?.logger;
@@ -59,15 +109,12 @@ export async function gig(options, deps) {
     logger = deps.logger;
 
     const date = validatePerformanceDate(options.date);
-    const name = buildPlaylistTitle(date, options.performer);
-    const description = buildPlaylistDescription(options.performer);
+    // Validates the performer before any API call
+    buildPlaylistTitle(date, options.performer);
     const performer = options.performer.trim();
     const showCount = parseShowCount(options.shows);
     const today = deps.today || localToday();
-
-    if (date < today) {
-      throw new Error(`${date} is in the past; actual setlists are not supported yet`);
-    }
+    const isPast = date < today;
 
     // Sign in before the slower setlist.fm calls so a sign-in problem shows up straight away
     const userAccessToken = options.dryRun ? null : await deps.auth.getUserAccessToken();
@@ -77,31 +124,40 @@ export async function gig(options, deps) {
       throw new Error(`No artist found for "${performer}"`);
     }
 
-    const setlists = await findSourceSetlists(deps, artist.mbid, date, showCount);
-    if (setlists.length === 0) {
-      throw new Error(`No setlists with songs found for ${artist.name} before ${date}`);
+    let plan;
+    if (isPast) {
+      const setlist = await findShowSetlist(deps, artist.mbid, date, options.city);
+      if (setlist) {
+        logger.info(`Using the setlist from ${setlist.eventDate} at ${setlist.venue?.name}, ${setlist.venue?.city?.name}`);
+        plan = planActual(setlist, performer, date);
+      } else {
+        logger.info('No setlist has been posted on setlist.fm for this show yet; try again later.');
+        if (!options.dryRun) {
+          const existing = await findShowPlaylist(deps, userAccessToken, { date, performer });
+          if (existing) {
+            logger.info(`Keeping playlist "${existing.name}" unchanged`);
+            logger.info(`URL: ${existing.externalUrl}`);
+            return { kind: 'existing', prediction: null, results: null, saved: { action: 'unchanged', changes: [], playlist: existing } };
+          }
+        }
+      }
     }
+    plan = plan || await planPrediction(deps, artist, performer, date, showCount);
 
-    const prediction = predictSetlist(setlists);
-    logger.info(`Predicting from ${prediction.showCount} show(s): ` +
-      prediction.sources.map(s => `${s.eventDate} ${s.venue}, ${s.city} (${s.songCount} songs)`).join('; '));
-
-    // Search Spotify under setlist.fm's spelling of the artist, which matches Spotify's more often than typed input
-    const spotifyArtist = setlists[0].artist?.name || artist.name;
-    logger.info(`Matching ${prediction.songs.length} song(s) with Spotify...`);
-    const results = await matchSongs(deps, spotifyArtist, prediction.songs);
+    logger.info(`Matching ${plan.songs.length} song(s) with Spotify...`);
+    const results = await matchSongs(deps, plan.spotifyArtist, plan.songs);
     deps.output(`\n${formatMatchTable(results)}\n`);
 
     if (options.dryRun) {
-      logger.info(`Dry run: no playlist created or changed. Title would be "${name}"; description "${description}"`);
-      return { prediction, results, saved: null };
+      logger.info(`Dry run: no playlist created or changed. Title would be "${plan.name}"; description "${plan.description}"`);
+      return { kind: plan.kind, prediction: plan.prediction || null, results, saved: null };
     }
 
     const saved = await saveShowPlaylist(deps, userAccessToken, {
       date,
       performer,
-      name,
-      description,
+      name: plan.name,
+      description: plan.description,
       // On update, only change visibility when --private is given
       isPublic: options.private ? false : undefined
     }, results);
@@ -113,7 +169,7 @@ export async function gig(options, deps) {
     };
     logger.info(summary[saved.action]);
     logger.info(`URL: ${saved.playlist.externalUrl}`);
-    return { prediction, results, saved };
+    return { kind: plan.kind, prediction: plan.prediction || null, results, saved };
   } catch (error) {
     (logger || console).error(`Gig command error: ${error.message}`);
     process.exitCode = 1;

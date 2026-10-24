@@ -9,6 +9,7 @@ import {
   buildPlaylistTitle,
   buildPlaylistDescription,
   setlistDateToPerformanceDate,
+  buildActualDescription,
   createPlaylistFromMatches,
   findShowPlaylist,
   saveShowPlaylist,
@@ -165,6 +166,34 @@ describe('playlistBuilder', () => {
 
     it('should require a performer', () => {
       expect(() => buildPlaylistTitle('20261029', ' ')).to.throw('Performer is required');
+    });
+  });
+
+  describe('buildPlaylistTitle for an actual setlist', () => {
+    it('should format the title as "YYYYMMDD performer - actual setlist"', () => {
+      expect(buildPlaylistTitle('20261022', 'Mudhoney', 'actual')).to.equal('20261022 Mudhoney - actual setlist');
+    });
+
+    it('should default to a predicted setlist', () => {
+      expect(buildPlaylistTitle('20261022', 'Mudhoney')).to.equal('20261022 Mudhoney - predicted setlist');
+    });
+
+    it('should reject an unknown kind', () => {
+      expect(() => buildPlaylistTitle('20261022', 'Mudhoney', 'guessed')).to.throw('kind');
+    });
+  });
+
+  describe('buildActualDescription', () => {
+    it('should name the performer, venue, city and date', () => {
+      expect(buildActualDescription('Mudhoney', 'The Factory Theatre', 'Sydney', '20261022'))
+        .to.equal('The setlist Mudhoney played at The Factory Theatre, Sydney on 22 Oct 2026.');
+    });
+
+    it('should drop a missing venue or city', () => {
+      expect(buildActualDescription('Mudhoney', null, 'Sydney', '20260105'))
+        .to.equal('The setlist Mudhoney played in Sydney on 5 Jan 2026.');
+      expect(buildActualDescription('Mudhoney', null, null, '20260105'))
+        .to.equal('The setlist Mudhoney played on 5 Jan 2026.');
     });
   });
 
