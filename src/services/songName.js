@@ -8,7 +8,7 @@
 const VERSION_WORDS = /\b(live|demo|remaster(ed)?|version|mix|edit|mono|stereo|acoustic|sessions?|take|instrumental|single|bonus|recorded|unplugged|rehearsal|outtake|\d{4})\b/i;
 
 function straightenQuotes(text) {
-  return text.replace(/[‘’ʼ`]/g, '\'').replace(/[“”]/g, '"');
+  return text.replace(/[\u2018\u2019\u02bc`]/g, '\'').replace(/[\u201c\u201d]/g, '"');
 }
 
 /**
@@ -29,7 +29,7 @@ export function cleanSearchTerm(name) {
 export function normaliseForCompare(name) {
   return straightenQuotes(name || '')
     .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/&/g, ' and ')
     .replace(/'/g, '')
@@ -46,7 +46,7 @@ export function normaliseForCompare(name) {
 export function splitVersion(trackName) {
   const name = (trackName || '').trim();
 
-  const dash = name.match(/^(.+?)\s+[-–—]\s+(.+)$/);
+  const dash = name.match(/^(.+?)\s+[-\u2013\u2014]\s+(.+)$/);
   if (dash) {
     return { title: dash[1].trim(), version: dash[2].trim() };
   }

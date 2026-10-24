@@ -27,7 +27,7 @@ describe('songName', () => {
     });
 
     it('should turn curly apostrophes into straight ones', () => {
-      expect(cleanSearchTerm('Touch Me I’m Sick')).to.equal('Touch Me I\'m Sick');
+      expect(cleanSearchTerm('Touch Me I\u2019m Sick')).to.equal('Touch Me I\'m Sick');
     });
   });
 
@@ -35,7 +35,7 @@ describe('songName', () => {
     it('should lower-case and drop punctuation and apostrophes', () => {
       expect(normaliseForCompare('Who You Drivin\' Now?')).to.equal('who you drivin now');
       expect(normaliseForCompare('In \'N\' Out Of Grace')).to.equal('in n out of grace');
-      expect(normaliseForCompare('In ‘n’ Out of Grace')).to.equal('in n out of grace');
+      expect(normaliseForCompare('In \u2018n\u2019 Out of Grace')).to.equal('in n out of grace');
     });
 
     it('should treat brackets as spaces', () => {
@@ -44,7 +44,7 @@ describe('songName', () => {
     });
 
     it('should treat & as "and" and remove accents', () => {
-      expect(normaliseForCompare('Rock & Roll Café')).to.equal('rock and roll cafe');
+      expect(normaliseForCompare('Rock & Roll Caf\u00e9')).to.equal('rock and roll cafe');
     });
 
     it('should handle empty input', () => {
