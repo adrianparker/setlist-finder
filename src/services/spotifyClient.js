@@ -1,3 +1,10 @@
+import 'dotenv/config';
+import { cleanSearchTerm } from './songName.js';
+
+// Development-mode apps may request at most 10 search results at a time (February 2026 change)
+const SEARCH_PAGE_SIZE = 10;
+const SEARCH_MAX_PAGES = 2;
+
 export class SpotifyClient {
   constructor(logger) {
     this.logger = logger;
@@ -47,51 +54,83 @@ export class SpotifyClient {
     }
   }
 
+  /**
+   * Search Spotify for an artist's song. Runs the field-filtered search plus a second
+   * "<song> live" search, so live versions are not crowded out by the 10-result limit,
+   * fetches a further page when a page is full, and merges the results without duplicates.
+   */
   async searchTracks(artistName, songName) {
     try {
-      const token = await this.getAccessToken();
-      
       // Validate inputs
       if (!artistName || !songName) {
         this.logger.warn(`Invalid search parameters: artist="${artistName}", song="${songName}"`);
         return [];
       }
-  
+
+      const token = await this.getAccessToken();
+
       // Build query with field filters: artist:name track:name
-      const query = `artist:${artistName} track:${songName}`;
-      const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=10`;
-  
+      const query = `artist:${artistName} track:${cleanSearchTerm(songName)}`;
+      const tracks = await this.searchTrackPages(token, query);
+
+      try {
+        tracks.push(...await this.searchTrackPages(token, `${query} live`));
+      } catch (err) {
+        this.logger.warn(`Spotify live search failed for "${artistName} - ${songName}": ${err.message}`);
+      }
+
+      const seen = new Set();
+      return tracks
+        .filter(track => !seen.has(track.id) && seen.add(track.id))
+        .map(track => ({
+          id: track.id,
+          name: track.name,
+          uri: track.uri,
+          explicit: track.explicit,
+          popularity: track.popularity,
+          artists: track.artists.map(a => ({ name: a.name, id: a.id })),
+          album: {
+            id: track.album.id,
+            name: track.album.name,
+            albumType: track.album.album_type,
+            releaseDate: track.album.release_date,
+            images: track.album.images || []
+          }
+        }));
+    } catch (err) {
+      this.logger.error(`Spotify search failed for "${artistName} - ${songName}": ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Run one search query, fetching up to SEARCH_MAX_PAGES pages of SEARCH_PAGE_SIZE results
+   * @private
+   */
+  async searchTrackPages(token, query) {
+    const tracks = [];
+    for (let pageIndex = 0; pageIndex < SEARCH_MAX_PAGES; pageIndex++) {
+      const offset = pageIndex * SEARCH_PAGE_SIZE;
+      const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=${SEARCH_PAGE_SIZE}&offset=${offset}`;
+      this.logger.debug(`Spotify search: "${query}" offset ${offset}`);
+
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-  
+
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
-  
+
       const data = await response.json();
-      const tracks = data.tracks?.items || [];
-  
-      return tracks.map(track => ({
-        id: track.id,
-        name: track.name,
-        uri: track.uri,
-        explicit: track.explicit,
-        popularity: track.popularity,
-        artists: track.artists.map(a => ({ name: a.name, id: a.id })),
-        album: {
-          id: track.album.id,
-          name: track.album.name,
-          releaseDate: track.album.release_date,
-          images: track.album.images || []
-        }
-      }));
-    } catch (err) {
-      this.logger.error(`Spotify search failed for "${artistName} - ${songName}": ${err.message}`);
-      return [];
+      const items = data.tracks?.items || [];
+      tracks.push(...items);
+
+      if (items.length < SEARCH_PAGE_SIZE) break;
     }
+    return tracks;
   }
 
   /**

@@ -125,6 +125,7 @@ describe('SpotifyClient', () => {
                 album: {
                   id: 'album-1',
                   name: 'Test Album',
+                  album_type: 'album',
                   release_date: '2023-01-01',
                   images: []
                 }
@@ -143,6 +144,7 @@ describe('SpotifyClient', () => {
       expect(results[0]).to.have.all.keys('id', 'name', 'uri', 'explicit', 'popularity', 'artists', 'album');
       expect(results[0].id).to.equal('track-1');
       expect(results[0].artists[0].name).to.equal('Test Artist');
+      expect(results[0].album).to.include({ name: 'Test Album', releaseDate: '2023-01-01', albumType: 'album' });
     });
 
     it('should return empty array if no tracks found', async () => {
@@ -157,6 +159,73 @@ describe('SpotifyClient', () => {
 
       expect(results).to.be.an('array');
       expect(results).to.have.lengthOf(0);
+    });
+
+    describe('query building and merging', () => {
+      const item = (id, name = 'Test Song') => ({
+        id,
+        name,
+        uri: `spotify:track:${id}`,
+        explicit: false,
+        artists: [{ name: 'Test Artist', id: 'artist-1' }],
+        album: { id: `album-${id}`, name: 'Album', release_date: '2020-01-01', images: [] }
+      });
+      const page = items => ({ ok: true, json: sinon.stub().resolves({ tracks: { items } }) });
+      const queryOf = call => new URL(call.args[0]).searchParams;
+
+      it('should search for the song and for a live version, merging without duplicates', async () => {
+        fetchStub.onFirstCall().resolves(page([item('studio'), item('shared')]));
+        fetchStub.onSecondCall().resolves(page([item('shared'), item('live', 'Test Song - Live')]));
+
+        const results = await client.searchTracks('Test Artist', 'Test Song');
+
+        expect(fetchStub.callCount).to.equal(2);
+        expect(queryOf(fetchStub.firstCall).get('q')).to.equal('artist:Test Artist track:Test Song');
+        expect(queryOf(fetchStub.secondCall).get('q')).to.equal('artist:Test Artist track:Test Song live');
+        expect(queryOf(fetchStub.firstCall).get('limit')).to.equal('10');
+        expect(results.map(r => r.id)).to.deep.equal(['studio', 'shared', 'live']);
+      });
+
+      it('should tidy punctuation and brackets in the song name', async () => {
+        fetchStub.resolves(page([]));
+
+        await client.searchTracks('Mudhoney', 'Sweet Young Thing (Ain\'t Sweet No More)?');
+
+        expect(queryOf(fetchStub.firstCall).get('q')).to.equal('artist:Mudhoney track:Sweet Young Thing Ain\'t Sweet No More');
+      });
+
+      it('should fetch a second page when the first page is full', async () => {
+        const fullPage = Array.from({ length: 10 }, (_, i) => item(`p1-${i}`));
+        fetchStub.onCall(0).resolves(page(fullPage));
+        fetchStub.onCall(1).resolves(page([item('p2-0')]));
+        fetchStub.onCall(2).resolves(page([]));
+
+        const results = await client.searchTracks('Test Artist', 'Test Song');
+
+        expect(queryOf(fetchStub.getCall(1)).get('offset')).to.equal('10');
+        expect(queryOf(fetchStub.getCall(1)).get('q')).to.equal('artist:Test Artist track:Test Song');
+        expect(results).to.have.lengthOf(11);
+      });
+
+      it('should stop paging at the page limit', async () => {
+        const fullPage = Array.from({ length: 10 }, (_, i) => item(`x-${Math.random()}-${i}`));
+        fetchStub.callsFake(async () => page(fullPage.map(t => ({ ...t, id: `${t.id}-${Math.random()}` }))));
+
+        await client.searchTracks('Test Artist', 'Test Song');
+
+        // 2 pages for the song query plus 2 for the live query
+        expect(fetchStub.callCount).to.equal(4);
+      });
+
+      it('should keep the main results when the live search fails', async () => {
+        fetchStub.onFirstCall().resolves(page([item('studio')]));
+        fetchStub.onSecondCall().resolves({ ok: false, status: 429, statusText: 'Too Many Requests' });
+
+        const results = await client.searchTracks('Test Artist', 'Test Song');
+
+        expect(results.map(r => r.id)).to.deep.equal(['studio']);
+        expect(logger.warn.called).to.be.true;
+      });
     });
 
     it('should handle search errors gracefully', async () => {
