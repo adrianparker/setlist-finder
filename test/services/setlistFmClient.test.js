@@ -1,4 +1,4 @@
-import { describe, it } from 'mocha';
+import { describe, it, beforeEach, afterEach } from 'mocha';
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { SetlistFmClient } from '../../src/services/setlistFmClient.js';
@@ -10,8 +10,12 @@ describe('SetlistFmClient', () => {
   let client;
   let mockLogger;
   let fetchStub;
+  let savedApiKey;
 
   beforeEach(() => {
+    // Use a test key so the suite never depends on a real key in .env
+    savedApiKey = process.env.SETLISTFM_API_KEY;
+    process.env.SETLISTFM_API_KEY = 'test-setlistfm-key';
     mockLogger = {
       debug: sinon.stub(),
       info: sinon.stub(),
@@ -24,6 +28,8 @@ describe('SetlistFmClient', () => {
 
   afterEach(() => {
     fetchStub.restore();
+    if (savedApiKey === undefined) delete process.env.SETLISTFM_API_KEY;
+    else process.env.SETLISTFM_API_KEY = savedApiKey;
   });
 
   describe('constructor', () => {
@@ -33,7 +39,7 @@ describe('SetlistFmClient', () => {
     });
 
     it('should read API key from environment', () => {
-      expect(client.apiKey).to.equal(process.env.SETLISTFM_API_KEY);
+      expect(client.apiKey).to.equal('test-setlistfm-key');
     });
   });
 
