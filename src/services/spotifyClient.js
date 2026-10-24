@@ -1,6 +1,42 @@
+import 'dotenv/config';
+import { cleanSearchTerm } from './songName.js';
+
+// Development-mode apps may request at most 10 search results at a time (February 2026 change)
+const SEARCH_PAGE_SIZE = 10;
+const SEARCH_MAX_PAGES = 2;
+
+// Short rate-limit waits are retried; Development Mode can also impose waits of many hours,
+// and carrying on with requests then only earns more refusals, so those stop at once
+const MAX_RATE_LIMIT_WAIT_SECONDS = 10;
+const MAX_RATE_LIMIT_RETRIES = 2;
+
+function describeWait(seconds) {
+  if (seconds >= 2 * 3600) return `about ${Math.round(seconds / 3600)} hours`;
+  if (seconds >= 120) return `about ${Math.round(seconds / 60)} minutes`;
+  return `${seconds} seconds`;
+}
+
+/**
+ * Spotify refused a request with HTTP 429 and asked for a wait too long to sit through
+ */
+export class SpotifyRateLimitError extends Error {
+  constructor(retryAfterSeconds) {
+    const after = new Date(Date.now() + retryAfterSeconds * 1000);
+    const when = after.toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    super(`Spotify rate limit reached; try again in ${describeWait(retryAfterSeconds)} (after ${when})`);
+    this.name = 'SpotifyRateLimitError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 export class SpotifyClient {
-  constructor(logger) {
+  /**
+   * @param {Object} logger - Logger instance
+   * @param {Object} options - { searchCache }: optional SearchCache for track searches
+   */
+  constructor(logger, options = {}) {
     this.logger = logger;
+    this.searchCache = options.searchCache || null;
     this.clientId = process.env.SPOTIFY_CLIENT_ID;
     this.clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
     this.accessToken = null;
@@ -8,6 +44,31 @@ export class SpotifyClient {
 
     if (!this.clientId || !this.clientSecret) {
       throw new Error('SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET environment variables are required');
+    }
+  }
+
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * fetch() with Spotify rate-limit handling: short Retry-After waits are retried,
+   * long ones throw SpotifyRateLimitError straight away
+   * @private
+   */
+  async spotifyFetch(url, options) {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url, options);
+      if (response.status !== 429) {
+        return response;
+      }
+
+      const retryAfterSeconds = Number(response.headers?.get?.('retry-after')) || 1;
+      if (retryAfterSeconds > MAX_RATE_LIMIT_WAIT_SECONDS || attempt >= MAX_RATE_LIMIT_RETRIES) {
+        throw new SpotifyRateLimitError(retryAfterSeconds);
+      }
+      this.logger.warn(`Spotify rate limit: waiting ${retryAfterSeconds}s before retrying`);
+      await this.sleep(retryAfterSeconds * 1000);
     }
   }
 
@@ -21,7 +82,7 @@ export class SpotifyClient {
       this.logger.debug('Requesting Spotify access token');
       const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
       
-      const response = await fetch('https://accounts.spotify.com/api/token', {
+      const response = await this.spotifyFetch('https://accounts.spotify.com/api/token', {
         method: 'POST',
         headers: {
           'Authorization': `Basic ${auth}`,
@@ -47,101 +108,103 @@ export class SpotifyClient {
     }
   }
 
+  /**
+   * Search Spotify for an artist's song. Runs the field-filtered search plus a second
+   * "<song> live" search, so live versions are not crowded out by the 10-result limit,
+   * fetches a further page when a page is full, and merges the results without duplicates.
+   * Throws when a search fails (SpotifyRateLimitError for a long rate limit).
+   */
   async searchTracks(artistName, songName) {
     try {
-      const token = await this.getAccessToken();
-      
       // Validate inputs
       if (!artistName || !songName) {
         this.logger.warn(`Invalid search parameters: artist="${artistName}", song="${songName}"`);
         return [];
       }
-  
+
       // Build query with field filters: artist:name track:name
-      const query = `artist:${artistName} track:${songName}`;
-      const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=10`;
-  
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-  
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-  
-      const data = await response.json();
-      const tracks = data.tracks?.items || [];
-  
-      return tracks.map(track => ({
-        id: track.id,
-        name: track.name,
-        uri: track.uri,
-        explicit: track.explicit,
-        popularity: track.popularity,
-        artists: track.artists.map(a => ({ name: a.name, id: a.id })),
-        album: {
-          id: track.album.id,
-          name: track.album.name,
-          releaseDate: track.album.release_date,
-          images: track.album.images || []
-        }
-      }));
-    } catch (err) {
-      this.logger.error(`Spotify search failed for "${artistName} - ${songName}": ${err.message}`);
-      return [];
-    }
-  }
+      const query = `artist:${artistName} track:${cleanSearchTerm(songName)}`;
 
-  async createPlaylist(userId, playlistName, isPublic = true) {
-    try {
+      const cached = this.searchCache?.get(query);
+      if (cached) {
+        this.logger.debug(`Spotify search from cache: "${query}"`);
+        return cached;
+      }
+
       const token = await this.getAccessToken();
+      const tracks = await this.searchTrackPages(token, query);
 
-      if (!userId || !playlistName) {
-        this.logger.warn(`Invalid playlist parameters: userId="${userId}", name="${playlistName}"`);
-        throw new Error('User ID and playlist name are required');
+      try {
+        tracks.push(...await this.searchTrackPages(token, `${query} live`));
+      } catch (err) {
+        if (err instanceof SpotifyRateLimitError) throw err;
+        this.logger.warn(`Spotify live search failed for "${artistName} - ${songName}": ${err.message}`);
       }
 
-      const url = `https://api.spotify.com/v1/users/${encodeURIComponent(userId)}/playlists`;
-      
-      this.logger.debug(`Creating Spotify playlist: "${playlistName}" for user ${userId}`);
+      const seen = new Set();
+      const results = tracks
+        .filter(track => !seen.has(track.id) && seen.add(track.id))
+        .map(track => ({
+          id: track.id,
+          name: track.name,
+          uri: track.uri,
+          explicit: track.explicit,
+          popularity: track.popularity,
+          artists: track.artists.map(a => ({ name: a.name, id: a.id })),
+          album: {
+            id: track.album.id,
+            name: track.album.name,
+            albumType: track.album.album_type,
+            releaseDate: track.album.release_date,
+            images: track.album.images || []
+          }
+        }));
 
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          name: playlistName,
-          public: isPublic,
-          description: `Setlist playlist created by setlist-finder`
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMessage = errorData.error?.message || response.statusText;
-        throw new Error(`HTTP ${response.status}: ${errorMessage}`);
-      }
-
-      const data = await response.json();
-      this.logger.info(`Playlist created: "${playlistName}" (ID: ${data.id})`);
-
-      return {
-        id: data.id,
-        uri: data.uri,
-        externalUrl: data.external_urls?.spotify || '',
-        name: data.name
-      };
+      // Only complete, successful searches are cached
+      this.searchCache?.set(query, results);
+      return results;
     } catch (err) {
-      this.logger.error(`Failed to create Spotify playlist: ${err.message}`);
+      // Pass errors on, so a failed search is never mistaken for a song with no match
+      this.logger.error(`Spotify search failed for "${artistName} - ${songName}": ${err.message}`);
       throw err;
     }
   }
 
-  async createPlaylistAsUser(userAccessToken, playlistName, isPublic = true) {
+  /**
+   * Run one search query, fetching up to SEARCH_MAX_PAGES pages of SEARCH_PAGE_SIZE results
+   * @private
+   */
+  async searchTrackPages(token, query) {
+    const tracks = [];
+    for (let pageIndex = 0; pageIndex < SEARCH_MAX_PAGES; pageIndex++) {
+      const offset = pageIndex * SEARCH_PAGE_SIZE;
+      const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=${SEARCH_PAGE_SIZE}&offset=${offset}`;
+      this.logger.debug(`Spotify search: "${query}" offset ${offset}`);
+
+      const response = await this.spotifyFetch(url, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const items = data.tracks?.items || [];
+      tracks.push(...items);
+
+      if (items.length < SEARCH_PAGE_SIZE) break;
+    }
+    return tracks;
+  }
+
+  /**
+   * Create a playlist in the signed-in user's account (POST /me/playlists).
+   * Requires a user access token from SpotifyAuth; client-credentials tokens cannot create playlists.
+   */
+  async createPlaylist(userAccessToken, playlistName, { isPublic = false, description = 'Setlist playlist created by setlist-finder' } = {}) {
     try {
       if (!userAccessToken || !playlistName) {
         this.logger.warn(`Invalid parameters: token="${!!userAccessToken}", name="${playlistName}"`);
@@ -149,10 +212,10 @@ export class SpotifyClient {
       }
 
       const url = 'https://api.spotify.com/v1/me/playlists';
-      
-      this.logger.debug(`Creating Spotify playlist as user: "${playlistName}"`);
 
-      const response = await fetch(url, {
+      this.logger.debug(`Creating Spotify playlist: "${playlistName}" (public: ${isPublic})`);
+
+      const response = await this.spotifyFetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${userAccessToken}`,
@@ -161,7 +224,7 @@ export class SpotifyClient {
         body: JSON.stringify({
           name: playlistName,
           public: isPublic,
-          description: `Setlist playlist created by setlist-finder`
+          description
         })
       });
 
@@ -177,18 +240,126 @@ export class SpotifyClient {
       return {
         id: data.id,
         uri: data.uri,
-        externalUrl: data.external_urls?.spotify || '',
+        externalUrl: data.external_urls?.spotify || `https://open.spotify.com/playlist/${data.id}`,
         name: data.name
       };
     } catch (err) {
-      this.logger.error(`Failed to create Spotify playlist as user: ${err.message}`);
+      this.logger.error(`Failed to create Spotify playlist: ${err.message}`);
       throw err;
     }
   }
 
-  async addTracksToPlaylist(playlistId, trackUris) {
+  /**
+   * Send a request with a user access token and return the parsed JSON body (null if empty)
+   * @private
+   */
+  async userRequest(userAccessToken, method, url, body) {
+    if (!userAccessToken) {
+      throw new Error('User access token is required');
+    }
+
+    this.logger.debug(`Spotify API request: ${method} ${url}`);
+    const options = { method, headers: { 'Authorization': `Bearer ${userAccessToken}` } };
+    if (body !== undefined) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+
+    const response = await this.spotifyFetch(url, options);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMessage = errorData.error?.message || response.statusText;
+      throw new Error(`HTTP ${response.status}: ${errorMessage}`);
+    }
+
+    // Some endpoints, such as changing playlist details, return an empty body
+    return response.json ? response.json().catch(() => null) : null;
+  }
+
+  /**
+   * Get the signed-in user's Spotify ID (GET /me)
+   */
+  async getCurrentUser(userAccessToken) {
+    const data = await this.userRequest(userAccessToken, 'GET', 'https://api.spotify.com/v1/me');
+    return { id: data.id, displayName: data.display_name };
+  }
+
+  /**
+   * List every playlist in the signed-in user's library (GET /me/playlists), 50 per page
+   */
+  async listMyPlaylists(userAccessToken) {
+    const playlists = [];
+    let url = 'https://api.spotify.com/v1/me/playlists?limit=50';
+    while (url) {
+      const data = await this.userRequest(userAccessToken, 'GET', url);
+      for (const playlist of data.items || []) {
+        if (!playlist) continue;
+        playlists.push({
+          id: playlist.id,
+          name: playlist.name,
+          description: playlist.description || '',
+          isPublic: playlist.public,
+          ownerId: playlist.owner?.id,
+          externalUrl: playlist.external_urls?.spotify || `https://open.spotify.com/playlist/${playlist.id}`
+        });
+      }
+      url = data.next;
+    }
+    this.logger.debug(`Found ${playlists.length} playlist(s) in the user's library`);
+    return playlists;
+  }
+
+  /**
+   * Change a playlist's name and description, and its visibility only when isPublic is given
+   * (PUT /playlists/{id})
+   */
+  async updatePlaylistDetails(userAccessToken, playlistId, { name, description, isPublic } = {}) {
+    const body = { name, description };
+    if (isPublic !== undefined) body.public = isPublic;
+    await this.userRequest(userAccessToken, 'PUT', `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}`, body);
+    this.logger.info(`Playlist details updated: "${name}" (ID: ${playlistId})`);
+  }
+
+  /**
+   * Read the URIs of a playlist's tracks in order (GET /playlists/{id}/items), 50 per page
+   */
+  async getPlaylistTrackUris(userAccessToken, playlistId) {
+    const uris = [];
+    let url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items?limit=50`;
+    while (url) {
+      const data = await this.userRequest(userAccessToken, 'GET', url);
+      for (const entry of data.items || []) {
+        // "item" replaced the deprecated "track" field; local or removed tracks may be null
+        const uri = (entry?.item || entry?.track)?.uri;
+        if (uri) uris.push(uri);
+      }
+      url = data.next;
+    }
+    return uris;
+  }
+
+  /**
+   * Replace all of a playlist's tracks, keeping its ID (PUT /playlists/{id}/items).
+   * PUT takes at most 100 URIs, so any beyond that are appended in order.
+   */
+  async replacePlaylistTracks(userAccessToken, playlistId, trackUris) {
+    const url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items`;
+    await this.userRequest(userAccessToken, 'PUT', url, { uris: trackUris.slice(0, 100) });
+    for (let i = 100; i < trackUris.length; i += 100) {
+      await this.userRequest(userAccessToken, 'POST', url, { uris: trackUris.slice(i, i + 100) });
+    }
+    this.logger.info(`Replaced playlist ${playlistId} tracks with ${trackUris.length} track(s)`);
+  }
+
+  /**
+   * Append tracks to a playlist in order (POST /playlists/{id}/items), 100 per request.
+   * Requires a user access token from SpotifyAuth.
+   */
+  async addTracksToPlaylist(userAccessToken, playlistId, trackUris) {
     try {
-      const token = await this.getAccessToken();
+      if (!userAccessToken) {
+        throw new Error('User access token is required');
+      }
 
       if (!playlistId) {
         this.logger.warn(`Invalid playlist ID: "${playlistId}"`);
@@ -210,17 +381,17 @@ export class SpotifyClient {
         batches.push(trackUris.slice(i, i + batchSize));
       }
 
-      const addedTracks = [];
+      let snapshotId = null;
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
-        const url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks`;
+        const url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items`;
 
         this.logger.debug(`Adding batch ${batchIndex + 1}/${batches.length} (${batch.length} tracks)`);
 
-        const response = await fetch(url, {
+        const response = await this.spotifyFetch(url, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            'Authorization': `Bearer ${userAccessToken}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -235,14 +406,15 @@ export class SpotifyClient {
         }
 
         const data = await response.json();
-        addedTracks.push(...(data.snapshot_id || []));
+        snapshotId = data.snapshot_id || snapshotId;
       }
 
       this.logger.info(`Successfully added ${trackUris.length} track(s) to playlist`);
 
       return {
         tracksAdded: trackUris.length,
-        batches: batches.length
+        batches: batches.length,
+        snapshotId
       };
     } catch (err) {
       this.logger.error(`Failed to add tracks to playlist: ${err.message}`);

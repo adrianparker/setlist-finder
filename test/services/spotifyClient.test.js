@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'mocha';
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { SpotifyClient } from '../../src/services/spotifyClient.js';
+import { SpotifyClient, SpotifyRateLimitError } from '../../src/services/spotifyClient.js';
 
 describe('SpotifyClient', () => {
   let client;
@@ -125,6 +125,7 @@ describe('SpotifyClient', () => {
                 album: {
                   id: 'album-1',
                   name: 'Test Album',
+                  album_type: 'album',
                   release_date: '2023-01-01',
                   images: []
                 }
@@ -143,6 +144,7 @@ describe('SpotifyClient', () => {
       expect(results[0]).to.have.all.keys('id', 'name', 'uri', 'explicit', 'popularity', 'artists', 'album');
       expect(results[0].id).to.equal('track-1');
       expect(results[0].artists[0].name).to.equal('Test Artist');
+      expect(results[0].album).to.include({ name: 'Test Album', releaseDate: '2023-01-01', albumType: 'album' });
     });
 
     it('should return empty array if no tracks found', async () => {
@@ -159,97 +161,92 @@ describe('SpotifyClient', () => {
       expect(results).to.have.lengthOf(0);
     });
 
-    it('should handle search errors gracefully', async () => {
-      const mockSearchResponse = {
-        ok: false,
-        statusText: 'Not Found'
-      };
+    describe('query building and merging', () => {
+      const item = (id, name = 'Test Song') => ({
+        id,
+        name,
+        uri: `spotify:track:${id}`,
+        explicit: false,
+        artists: [{ name: 'Test Artist', id: 'artist-1' }],
+        album: { id: `album-${id}`, name: 'Album', release_date: '2020-01-01', images: [] }
+      });
+      const page = items => ({ ok: true, json: sinon.stub().resolves({ tracks: { items } }) });
+      const queryOf = call => new URL(call.args[0]).searchParams;
 
-      fetchStub.resolves(mockSearchResponse);
+      it('should search for the song and for a live version, merging without duplicates', async () => {
+        fetchStub.onFirstCall().resolves(page([item('studio'), item('shared')]));
+        fetchStub.onSecondCall().resolves(page([item('shared'), item('live', 'Test Song - Live')]));
 
-      const results = await client.searchTracks('Test Artist', 'Test Song');
+        const results = await client.searchTracks('Test Artist', 'Test Song');
 
-      expect(results).to.be.an('array');
-      expect(results).to.have.lengthOf(0);
-      expect(logger.error.called).to.be.true;
+        expect(fetchStub.callCount).to.equal(2);
+        expect(queryOf(fetchStub.firstCall).get('q')).to.equal('artist:Test Artist track:Test Song');
+        expect(queryOf(fetchStub.secondCall).get('q')).to.equal('artist:Test Artist track:Test Song live');
+        expect(queryOf(fetchStub.firstCall).get('limit')).to.equal('10');
+        expect(results.map(r => r.id)).to.deep.equal(['studio', 'shared', 'live']);
+      });
+
+      it('should tidy punctuation and brackets in the song name', async () => {
+        fetchStub.resolves(page([]));
+
+        await client.searchTracks('Mudhoney', 'Sweet Young Thing (Ain\'t Sweet No More)?');
+
+        expect(queryOf(fetchStub.firstCall).get('q')).to.equal('artist:Mudhoney track:Sweet Young Thing Ain\'t Sweet No More');
+      });
+
+      it('should fetch a second page when the first page is full', async () => {
+        const fullPage = Array.from({ length: 10 }, (_, i) => item(`p1-${i}`));
+        fetchStub.onCall(0).resolves(page(fullPage));
+        fetchStub.onCall(1).resolves(page([item('p2-0')]));
+        fetchStub.onCall(2).resolves(page([]));
+
+        const results = await client.searchTracks('Test Artist', 'Test Song');
+
+        expect(queryOf(fetchStub.getCall(1)).get('offset')).to.equal('10');
+        expect(queryOf(fetchStub.getCall(1)).get('q')).to.equal('artist:Test Artist track:Test Song');
+        expect(results).to.have.lengthOf(11);
+      });
+
+      it('should stop paging at the page limit', async () => {
+        const fullPage = Array.from({ length: 10 }, (_, i) => item(`x-${Math.random()}-${i}`));
+        fetchStub.callsFake(async () => page(fullPage.map(t => ({ ...t, id: `${t.id}-${Math.random()}` }))));
+
+        await client.searchTracks('Test Artist', 'Test Song');
+
+        // 2 pages for the song query plus 2 for the live query
+        expect(fetchStub.callCount).to.equal(4);
+      });
+
+      it('should keep the main results when the live search fails', async () => {
+        fetchStub.onFirstCall().resolves(page([item('studio')]));
+        fetchStub.onSecondCall().resolves({ ok: false, status: 429, statusText: 'Too Many Requests' });
+
+        const results = await client.searchTracks('Test Artist', 'Test Song');
+
+        expect(results.map(r => r.id)).to.deep.equal(['studio']);
+        expect(logger.warn.called).to.be.true;
+      });
+    });
+
+    it('should log and pass on search errors so callers can tell them from no match', async () => {
+      fetchStub.resolves({ ok: false, status: 500, statusText: 'Server Error' });
+
+      try {
+        await client.searchTracks('Test Artist', 'Test Song');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err.message).to.include('HTTP 500');
+        expect(logger.error.called).to.be.true;
+      }
     });
   });
 
   describe('createPlaylist', () => {
     beforeEach(() => {
       client = new SpotifyClient(logger);
-      client.accessToken = 'cached-token';
-      client.tokenExpiry = Date.now() + 100000;
     });
 
-    it('should create a playlist and return playlist details', async () => {
-      const mockResponse = {
-        ok: true,
-        json: sinon.stub().resolves({
-          id: 'playlist-123',
-          uri: 'spotify:playlist:playlist-123',
-          name: 'Test Playlist',
-          external_urls: {
-            spotify: 'https://open.spotify.com/playlist/playlist-123'
-          }
-        })
-      };
-
-      fetchStub.resolves(mockResponse);
-
-      const result = await client.createPlaylist('testuser', 'Test Playlist', true);
-
-      expect(result).to.have.all.keys('id', 'uri', 'externalUrl', 'name');
-      expect(result.id).to.equal('playlist-123');
-      expect(result.uri).to.equal('spotify:playlist:playlist-123');
-      expect(logger.info.called).to.be.true;
-    });
-
-    it('should throw error with invalid user ID', async () => {
-      const mockResponse = {
-        ok: false,
-        status: 404,
-        json: sinon.stub().resolves({
-          error: { message: 'User not found' }
-        })
-      };
-
-      fetchStub.resolves(mockResponse);
-
-      try {
-        await client.createPlaylist('invalid-user', 'Test Playlist', true);
-        expect.fail('Should have thrown an error');
-      } catch (err) {
-        expect(err.message).to.include('HTTP 404');
-        expect(logger.error.called).to.be.true;
-      }
-    });
-
-    it('should throw error if user ID is missing', async () => {
-      try {
-        await client.createPlaylist('', 'Test Playlist', true);
-        expect.fail('Should have thrown an error');
-      } catch (err) {
-        expect(err.message).to.include('User ID and playlist name are required');
-      }
-    });
-
-    it('should throw error if playlist name is missing', async () => {
-      try {
-        await client.createPlaylist('testuser', '', true);
-        expect.fail('Should have thrown an error');
-      } catch (err) {
-        expect(err.message).to.include('User ID and playlist name are required');
-      }
-    });
-  });
-
-  describe('createPlaylistAsUser', () => {
-    beforeEach(() => {
-      client = new SpotifyClient(logger);
-    });
-
-    it('should create a playlist using user access token', async () => {
+    it('should create a playlist with the user access token via /me/playlists', async () => {
       const mockResponse = {
         ok: true,
         json: sinon.stub().resolves({
@@ -264,14 +261,26 @@ describe('SpotifyClient', () => {
 
       fetchStub.resolves(mockResponse);
 
-      const result = await client.createPlaylistAsUser('user-token-xyz', 'User Playlist', true);
+      const result = await client.createPlaylist('user-token-xyz', 'User Playlist', { isPublic: false, description: 'My notes' });
 
       expect(result).to.have.all.keys('id', 'uri', 'externalUrl', 'name');
       expect(result.id).to.equal('playlist-456');
-      expect(result.uri).to.equal('spotify:playlist:playlist-456');
-      // Verify the call was made to /me/playlists endpoint
-      expect(fetchStub.calledWith('https://api.spotify.com/v1/me/playlists')).to.be.true;
+      expect(result.externalUrl).to.equal('https://open.spotify.com/playlist/playlist-456');
+      const [url, options] = fetchStub.firstCall.args;
+      expect(url).to.equal('https://api.spotify.com/v1/me/playlists');
+      expect(options.method).to.equal('POST');
+      expect(options.headers.Authorization).to.equal('Bearer user-token-xyz');
+      expect(JSON.parse(options.body)).to.deep.equal({ name: 'User Playlist', public: false, description: 'My notes' });
       expect(logger.info.called).to.be.true;
+    });
+
+    it('should default to a private playlist', async () => {
+      fetchStub.resolves({ ok: true, json: sinon.stub().resolves({ id: 'p1', uri: 'spotify:playlist:p1', name: 'N' }) });
+
+      const result = await client.createPlaylist('user-token-xyz', 'N');
+
+      expect(JSON.parse(fetchStub.firstCall.args[1].body).public).to.be.false;
+      expect(result.externalUrl).to.equal('https://open.spotify.com/playlist/p1');
     });
 
     it('should throw error with invalid access token', async () => {
@@ -286,7 +295,7 @@ describe('SpotifyClient', () => {
       fetchStub.resolves(mockResponse);
 
       try {
-        await client.createPlaylistAsUser('invalid-token', 'Test Playlist', true);
+        await client.createPlaylist('invalid-token', 'Test Playlist');
         expect.fail('Should have thrown an error');
       } catch (err) {
         expect(err.message).to.include('HTTP 401');
@@ -296,7 +305,7 @@ describe('SpotifyClient', () => {
 
     it('should throw error if access token is missing', async () => {
       try {
-        await client.createPlaylistAsUser('', 'Test Playlist', true);
+        await client.createPlaylist('', 'Test Playlist');
         expect.fail('Should have thrown an error');
       } catch (err) {
         expect(err.message).to.include('User access token and playlist name are required');
@@ -305,7 +314,7 @@ describe('SpotifyClient', () => {
 
     it('should throw error if playlist name is missing', async () => {
       try {
-        await client.createPlaylistAsUser('user-token-xyz', '', true);
+        await client.createPlaylist('user-token-xyz', '');
         expect.fail('Should have thrown an error');
       } catch (err) {
         expect(err.message).to.include('User access token and playlist name are required');
@@ -313,11 +322,221 @@ describe('SpotifyClient', () => {
     });
   });
 
-  describe('addTracksToPlaylist', () => {
+  describe('search cache', () => {
+    const item = id => ({
+      id,
+      name: 'Test Song',
+      uri: `spotify:track:${id}`,
+      explicit: false,
+      artists: [{ name: 'Test Artist', id: 'artist-1' }],
+      album: { id: `album-${id}`, name: 'Album', album_type: 'album', release_date: '2020-01-01', images: [] }
+    });
+    const page = items => ({ ok: true, status: 200, json: sinon.stub().resolves({ tracks: { items } }) });
+    let cache;
+
+    beforeEach(() => {
+      const store = new Map();
+      cache = {
+        get: sinon.stub().callsFake(key => store.get(key)),
+        set: sinon.stub().callsFake((key, value) => store.set(key, value))
+      };
+      client = new SpotifyClient(logger, { searchCache: cache });
+      client.accessToken = 'cached-token';
+      client.tokenExpiry = Date.now() + 100000;
+    });
+
+    it('should search Spotify once and answer the same query from the cache', async () => {
+      fetchStub.onFirstCall().resolves(page([item('studio')]));
+      fetchStub.onSecondCall().resolves(page([item('live')]));
+
+      const first = await client.searchTracks('Test Artist', 'Test Song');
+      const second = await client.searchTracks('Test Artist', 'Test Song');
+
+      expect(fetchStub.callCount).to.equal(2);
+      expect(second).to.deep.equal(first);
+      expect(cache.set.calledOnceWith('artist:Test Artist track:Test Song')).to.be.true;
+      expect(logger.debug.calledWithMatch('from cache')).to.be.true;
+    });
+
+    it('should not cache a failed search', async () => {
+      fetchStub.resolves({ ok: false, status: 500, statusText: 'Server Error' });
+
+      try {
+        await client.searchTracks('Test Artist', 'Test Song');
+      } catch {
+        // expected
+      }
+
+      expect(cache.set.called).to.be.false;
+    });
+  });
+
+  describe('rate limits', () => {
+    const limited = retryAfter => ({
+      ok: false,
+      status: 429,
+      statusText: 'Too Many Requests',
+      headers: { get: name => (name.toLowerCase() === 'retry-after' ? String(retryAfter) : null) },
+      json: sinon.stub().resolves({})
+    });
+    const page = { ok: true, status: 200, json: sinon.stub().resolves({ tracks: { items: [] } }) };
+
     beforeEach(() => {
       client = new SpotifyClient(logger);
       client.accessToken = 'cached-token';
       client.tokenExpiry = Date.now() + 100000;
+      client.sleep = sinon.stub().resolves();
+    });
+
+    it('should wait and retry a short rate limit', async () => {
+      fetchStub.onCall(0).resolves(limited(2));
+      fetchStub.resolves(page);
+
+      await client.searchTracks('Test Artist', 'Test Song');
+
+      expect(client.sleep.calledOnceWith(2000)).to.be.true;
+      expect(logger.warn.calledWithMatch('rate limit')).to.be.true;
+    });
+
+    it('should stop at once on a long rate limit, saying when to try again', async () => {
+      fetchStub.resolves(limited(66214));
+
+      try {
+        await client.searchTracks('Test Artist', 'Test Song');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).to.be.instanceOf(SpotifyRateLimitError);
+        expect(err.retryAfterSeconds).to.equal(66214);
+        expect(err.message).to.match(/try again in about 18 hours/);
+        expect(client.sleep.called).to.be.false;
+        expect(fetchStub.callCount).to.equal(1);
+      }
+    });
+
+    it('should stop when the live search hits the rate limit too', async () => {
+      fetchStub.onCall(0).resolves(page);
+      fetchStub.onCall(1).resolves(limited(600));
+
+      try {
+        await client.searchTracks('Test Artist', 'Test Song');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).to.be.instanceOf(SpotifyRateLimitError);
+      }
+    });
+
+    it('should apply to user requests as well', async () => {
+      fetchStub.resolves(limited(600));
+
+      try {
+        await client.listMyPlaylists('user-token');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).to.be.instanceOf(SpotifyRateLimitError);
+      }
+    });
+  });
+
+  describe('user playlist management', () => {
+    const ok = body => ({ ok: true, status: 200, json: sinon.stub().resolves(body) });
+
+    beforeEach(() => {
+      client = new SpotifyClient(logger);
+    });
+
+    it('should get the signed-in user', async () => {
+      fetchStub.resolves(ok({ id: 'adrian', display_name: 'Adrian' }));
+
+      const user = await client.getCurrentUser('user-token');
+
+      expect(fetchStub.firstCall.args[0]).to.equal('https://api.spotify.com/v1/me');
+      expect(fetchStub.firstCall.args[1].headers.Authorization).to.equal('Bearer user-token');
+      expect(user).to.deep.equal({ id: 'adrian', displayName: 'Adrian' });
+    });
+
+    it('should list all the user\'s playlists across pages', async () => {
+      fetchStub.onFirstCall().resolves(ok({
+        items: [{ id: 'p1', name: 'One', description: 'd1', public: true, owner: { id: 'adrian' }, external_urls: { spotify: 'https://open.spotify.com/playlist/p1' } }],
+        next: 'https://api.spotify.com/v1/me/playlists?offset=50&limit=50'
+      }));
+      fetchStub.onSecondCall().resolves(ok({
+        items: [{ id: 'p2', name: 'Two', description: '', public: false, owner: { id: 'someone' } }],
+        next: null
+      }));
+
+      const playlists = await client.listMyPlaylists('user-token');
+
+      expect(fetchStub.firstCall.args[0]).to.equal('https://api.spotify.com/v1/me/playlists?limit=50');
+      expect(fetchStub.secondCall.args[0]).to.equal('https://api.spotify.com/v1/me/playlists?offset=50&limit=50');
+      expect(playlists).to.deep.equal([
+        { id: 'p1', name: 'One', description: 'd1', isPublic: true, ownerId: 'adrian', externalUrl: 'https://open.spotify.com/playlist/p1' },
+        { id: 'p2', name: 'Two', description: '', isPublic: false, ownerId: 'someone', externalUrl: 'https://open.spotify.com/playlist/p2' }
+      ]);
+    });
+
+    it('should change playlist details', async () => {
+      fetchStub.resolves({ ok: true, status: 200, json: sinon.stub().rejects(new Error('empty body')) });
+
+      await client.updatePlaylistDetails('user-token', 'p1', { name: 'New', description: 'Desc', isPublic: false });
+
+      const [url, options] = fetchStub.firstCall.args;
+      expect(url).to.equal('https://api.spotify.com/v1/playlists/p1');
+      expect(options.method).to.equal('PUT');
+      expect(JSON.parse(options.body)).to.deep.equal({ name: 'New', description: 'Desc', public: false });
+    });
+
+    it('should leave visibility alone when not given', async () => {
+      fetchStub.resolves({ ok: true, status: 200 });
+
+      await client.updatePlaylistDetails('user-token', 'p1', { name: 'New', description: 'Desc' });
+
+      expect(JSON.parse(fetchStub.firstCall.args[1].body)).to.deep.equal({ name: 'New', description: 'Desc' });
+    });
+
+    it('should read a playlist\'s track URIs in order across pages', async () => {
+      fetchStub.onFirstCall().resolves(ok({
+        items: [{ item: { uri: 'spotify:track:a' } }, { item: null }, { track: { uri: 'spotify:track:b' } }],
+        next: 'https://api.spotify.com/v1/playlists/p1/items?offset=50&limit=50'
+      }));
+      fetchStub.onSecondCall().resolves(ok({ items: [{ item: { uri: 'spotify:track:c' } }], next: null }));
+
+      const uris = await client.getPlaylistTrackUris('user-token', 'p1');
+
+      expect(fetchStub.firstCall.args[0]).to.equal('https://api.spotify.com/v1/playlists/p1/items?limit=50');
+      expect(uris).to.deep.equal(['spotify:track:a', 'spotify:track:b', 'spotify:track:c']);
+    });
+
+    it('should replace a playlist\'s tracks, adding any beyond 100 in order', async () => {
+      fetchStub.resolves(ok({ snapshot_id: 's' }));
+      const uris = Array.from({ length: 130 }, (_, i) => `spotify:track:${i}`);
+
+      await client.replacePlaylistTracks('user-token', 'p1', uris);
+
+      const [putUrl, put] = fetchStub.firstCall.args;
+      expect(putUrl).to.equal('https://api.spotify.com/v1/playlists/p1/items');
+      expect(put.method).to.equal('PUT');
+      expect(JSON.parse(put.body).uris).to.deep.equal(uris.slice(0, 100));
+      const [postUrl, post] = fetchStub.secondCall.args;
+      expect(postUrl).to.equal('https://api.spotify.com/v1/playlists/p1/items');
+      expect(post.method).to.equal('POST');
+      expect(JSON.parse(post.body).uris).to.deep.equal(uris.slice(100));
+    });
+
+    it('should report API errors with the Spotify message', async () => {
+      fetchStub.resolves({ ok: false, status: 403, statusText: 'Forbidden', json: sinon.stub().resolves({ error: { message: 'Insufficient client scope' } }) });
+
+      try {
+        await client.listMyPlaylists('user-token');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err.message).to.equal('HTTP 403: Insufficient client scope');
+      }
+    });
+  });
+
+  describe('addTracksToPlaylist', () => {
+    beforeEach(() => {
+      client = new SpotifyClient(logger);
     });
 
     it('should add tracks to playlist successfully', async () => {
@@ -336,11 +555,16 @@ describe('SpotifyClient', () => {
         'spotify:track:track-3'
       ];
 
-      const result = await client.addTracksToPlaylist('playlist-123', trackUris);
+      const result = await client.addTracksToPlaylist('user-token', 'playlist-123', trackUris);
 
-      expect(result).to.have.all.keys('tracksAdded', 'batches');
+      expect(result).to.have.all.keys('tracksAdded', 'batches', 'snapshotId');
       expect(result.tracksAdded).to.equal(3);
       expect(result.batches).to.equal(1);
+      expect(result.snapshotId).to.equal('snapshot-123');
+      const [url, options] = fetchStub.firstCall.args;
+      expect(url).to.equal('https://api.spotify.com/v1/playlists/playlist-123/items');
+      expect(options.headers.Authorization).to.equal('Bearer user-token');
+      expect(JSON.parse(options.body).uris).to.deep.equal(trackUris);
       expect(logger.info.called).to.be.true;
     });
 
@@ -357,16 +581,28 @@ describe('SpotifyClient', () => {
       // Create 150 track URIs (requires 2 batches)
       const trackUris = Array.from({ length: 150 }, (_, i) => `spotify:track:track-${i + 1}`);
 
-      const result = await client.addTracksToPlaylist('playlist-123', trackUris);
+      const result = await client.addTracksToPlaylist('user-token', 'playlist-123', trackUris);
 
       expect(result.tracksAdded).to.equal(150);
       expect(result.batches).to.equal(2); // 100 in first batch, 50 in second
-      expect(fetchStub.callCount).to.be.at.least(2); // At least 2 requests (batches)
+      expect(fetchStub.callCount).to.equal(2);
+      // Order is preserved across batches
+      expect(JSON.parse(fetchStub.firstCall.args[1].body).uris).to.deep.equal(trackUris.slice(0, 100));
+      expect(JSON.parse(fetchStub.secondCall.args[1].body).uris).to.deep.equal(trackUris.slice(100));
+    });
+
+    it('should throw error if user access token is missing', async () => {
+      try {
+        await client.addTracksToPlaylist('', 'playlist-123', ['spotify:track:track-1']);
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err.message).to.include('User access token is required');
+      }
     });
 
     it('should throw error if playlist ID is missing', async () => {
       try {
-        await client.addTracksToPlaylist('', ['spotify:track:track-1']);
+        await client.addTracksToPlaylist('user-token', '', ['spotify:track:track-1']);
         expect.fail('Should have thrown an error');
       } catch (err) {
         expect(err.message).to.include('Playlist ID is required');
@@ -375,7 +611,7 @@ describe('SpotifyClient', () => {
 
     it('should throw error if track URIs array is empty', async () => {
       try {
-        await client.addTracksToPlaylist('playlist-123', []);
+        await client.addTracksToPlaylist('user-token', 'playlist-123', []);
         expect.fail('Should have thrown an error');
       } catch (err) {
         expect(err.message).to.include('At least one track URI is required');
@@ -384,7 +620,7 @@ describe('SpotifyClient', () => {
 
     it('should throw error if track URIs is not an array', async () => {
       try {
-        await client.addTracksToPlaylist('playlist-123', 'not-an-array');
+        await client.addTracksToPlaylist('user-token', 'playlist-123', 'not-an-array');
         expect.fail('Should have thrown an error');
       } catch (err) {
         expect(err.message).to.include('At least one track URI is required');
@@ -403,7 +639,7 @@ describe('SpotifyClient', () => {
       fetchStub.resolves(mockResponse);
 
       try {
-        await client.addTracksToPlaylist('playlist-123', ['spotify:track:track-1']);
+        await client.addTracksToPlaylist('user-token', 'playlist-123', ['spotify:track:track-1']);
         expect.fail('Should have thrown an error');
       } catch (err) {
         expect(err.message).to.include('HTTP 401');

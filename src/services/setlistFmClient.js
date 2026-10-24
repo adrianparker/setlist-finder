@@ -10,13 +10,45 @@ export class SetlistFmClient {
     this.apiKey = process.env.SETLISTFM_API_KEY;
   }
   
-  async searchSetlistsByArtist(mbid, city = null) {
+  /**
+   * Search an artist's setlists, newest first, 20 per page
+   * @param {string} mbid - MusicBrainz artist ID
+   * @param {string|null} city - optional city name filter
+   * @param {number} page - result page, starting at 1
+   */
+  async searchSetlistsByArtist(mbid, city = null, page = 1) {
     const url = new URL(`${this.baseUrl}/search/setlists`);
     url.searchParams.append('artistMbid', mbid);
     if (city) {
       url.searchParams.append('cityName', city);
-    }    
+    }
+    if (page > 1) {
+      url.searchParams.append('p', String(page));
+    }
     return await this.doFetch(url);
+  }
+
+  /**
+   * Find an artist's setlists on one date, optionally in one city
+   * @param {string} mbid - MusicBrainz artist ID
+   * @param {string} date - event date as dd-MM-yyyy, as setlist.fm expects
+   * @param {string|null} city - optional city name filter
+   * @returns {Promise<Object>} search result; { setlist: [] } when there are none
+   */
+  async searchSetlistsByArtistOnDate(mbid, date, city = null) {
+    const url = new URL(`${this.baseUrl}/search/setlists`);
+    url.searchParams.append('artistMbid', mbid);
+    url.searchParams.append('date', date);
+    if (city) {
+      url.searchParams.append('cityName', city);
+    }
+    try {
+      return await this.doFetch(url);
+    } catch (err) {
+      // setlist.fm answers 404 when nothing matches the search
+      if (/\b404\b/.test(err.message)) return { setlist: [] };
+      throw err;
+    }
   }
 
   async getSetlist(setlistId) {

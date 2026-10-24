@@ -137,3 +137,12 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Spotify user tokens (setlist-finder sign-in)
+.spotify-token.json
+
+# macOS Finder metadata
+.DS_Store
+
+# Spotify search results cache (setlist-finder)
+.spotify-search-cache.json

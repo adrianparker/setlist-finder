@@ -1,4 +1,4 @@
-import { describe, it } from 'mocha';
+import { describe, it, beforeEach, afterEach } from 'mocha';
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { SetlistFmClient } from '../../src/services/setlistFmClient.js';
@@ -10,8 +10,12 @@ describe('SetlistFmClient', () => {
   let client;
   let mockLogger;
   let fetchStub;
+  let savedApiKey;
 
   beforeEach(() => {
+    // Use a test key so the suite never depends on a real key in .env
+    savedApiKey = process.env.SETLISTFM_API_KEY;
+    process.env.SETLISTFM_API_KEY = 'test-setlistfm-key';
     mockLogger = {
       debug: sinon.stub(),
       info: sinon.stub(),
@@ -24,6 +28,8 @@ describe('SetlistFmClient', () => {
 
   afterEach(() => {
     fetchStub.restore();
+    if (savedApiKey === undefined) delete process.env.SETLISTFM_API_KEY;
+    else process.env.SETLISTFM_API_KEY = savedApiKey;
   });
 
   describe('constructor', () => {
@@ -33,7 +39,7 @@ describe('SetlistFmClient', () => {
     });
 
     it('should read API key from environment', () => {
-      expect(client.apiKey).to.equal(process.env.SETLISTFM_API_KEY);
+      expect(client.apiKey).to.equal('test-setlistfm-key');
     });
   });
 
@@ -91,6 +97,44 @@ describe('SetlistFmClient', () => {
       const callUrl = fetchStub.firstCall.args[0];
       expect(callUrl).to.include('cityName=Wellington');
       expect(mockLogger.info.calledWith(`Setlist.fm API Request: GET https://api.setlist.fm/rest/1.0/search/setlists?artistMbid=${mbid}&cityName=${city}`)).to.be.true;
+    });
+
+    it('should request a later page of results when asked', async function() {
+      this.timeout(timeout);
+      const mbid = '8f6bd1e4-fbe1-4f50-aa9b-94c450ec0f11';
+
+      fetchStub.resolves({
+        ok: true,
+        json: sinon.stub().resolves({ setlist: [] })
+      });
+
+      await client.searchSetlistsByArtist(mbid, null, 3);
+
+      const url = new URL(fetchStub.firstCall.args[0]);
+      expect(url.searchParams.get('p')).to.equal('3');
+      expect(url.searchParams.has('cityName')).to.be.false;
+    });
+
+    it('should search an artist\'s setlists on a date, optionally in a city', async function() {
+      this.timeout(timeout);
+      fetchStub.resolves({ ok: true, json: sinon.stub().resolves({ setlist: [] }) });
+
+      await client.searchSetlistsByArtistOnDate('mbid-1', '22-10-2026', 'Sydney');
+
+      const url = new URL(fetchStub.firstCall.args[0]);
+      expect(url.pathname).to.equal('/rest/1.0/search/setlists');
+      expect(url.searchParams.get('artistMbid')).to.equal('mbid-1');
+      expect(url.searchParams.get('date')).to.equal('22-10-2026');
+      expect(url.searchParams.get('cityName')).to.equal('Sydney');
+    });
+
+    it('should return no setlists when setlist.fm has none for the date', async function() {
+      this.timeout(timeout);
+      fetchStub.resolves({ ok: false, status: 404, statusText: 'Not Found' });
+
+      const result = await client.searchSetlistsByArtistOnDate('mbid-1', '22-10-2026');
+
+      expect(result).to.deep.equal({ setlist: [] });
     });
 
     it('should throw error on failed API response', async function() {
