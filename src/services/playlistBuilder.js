@@ -3,10 +3,13 @@
  * match each song, report the matches, then create the playlist and add tracks in order.
  */
 
+import { SpotifyRateLimitError } from './spotifyClient.js';
+
 export const MATCH_TYPE = {
   LIVE: 'LIVE',
   STUDIO: 'STUDIO',
-  NO_MATCH: 'NO MATCH'
+  NO_MATCH: 'NO MATCH',
+  ERROR: 'ERROR'
 };
 
 /**
@@ -21,15 +24,21 @@ export async function matchSongs({ spotifyClient, matcher, logger }, artistName,
 
   for (const [index, song] of songs.entries()) {
     let track = null;
+    let error = null;
     try {
       const candidates = await spotifyClient.searchTracks(artistName, song.name);
       track = matcher.findBestMatch(candidates, song.name, artistName);
     } catch (err) {
+      // A long rate limit would fail every remaining search, so stop here
+      if (err instanceof SpotifyRateLimitError) throw err;
       logger.error(`Error matching song "${song.name}": ${err.message}`);
+      error = err.message;
     }
 
-    const type = !track ? MATCH_TYPE.NO_MATCH : matcher.isLive(track) ? MATCH_TYPE.LIVE : MATCH_TYPE.STUDIO;
-    if (!track) {
+    const type = error ? MATCH_TYPE.ERROR
+      : !track ? MATCH_TYPE.NO_MATCH
+        : matcher.isLive(track) ? MATCH_TYPE.LIVE : MATCH_TYPE.STUDIO;
+    if (!track && !error) {
       logger.warn(`No Spotify match found for: ${artistName} - ${song.name}`);
     }
 
@@ -42,7 +51,8 @@ export async function matchSongs({ spotifyClient, matcher, logger }, artistName,
       album: track?.album?.name || null,
       releaseDate: track?.album?.releaseDate || null,
       uri: track?.uri || null,
-      url: track ? `https://open.spotify.com/track/${track.id}` : null
+      url: track ? `https://open.spotify.com/track/${track.id}` : null,
+      error
     });
   }
 
@@ -58,7 +68,8 @@ export function summariseMatches(results) {
     total: results.length,
     live: count(MATCH_TYPE.LIVE),
     studio: count(MATCH_TYPE.STUDIO),
-    unmatched: count(MATCH_TYPE.NO_MATCH)
+    unmatched: count(MATCH_TYPE.NO_MATCH),
+    failed: count(MATCH_TYPE.ERROR)
   };
 }
 
@@ -92,8 +103,9 @@ export function formatMatchTable(results) {
     ...results.map(r => row(columns.map(([, , value]) => value(r))))
   ];
 
-  const { total, live, studio, unmatched } = summariseMatches(results);
-  lines.push('', `${total} songs: ${live} live, ${studio} studio, ${unmatched} not matched`);
+  const { total, live, studio, unmatched, failed } = summariseMatches(results);
+  const failures = failed > 0 ? `, ${failed} search failed` : '';
+  lines.push('', `${total} songs: ${live} live, ${studio} studio, ${unmatched} not matched${failures}`);
   return lines.join('\n');
 }
 
@@ -170,6 +182,16 @@ function validatePerformer(performer) {
 }
 
 /**
+ * Refuse to write a playlist from incomplete matches: a failed search is not a missing song
+ */
+function assertNoFailedSearches(results) {
+  const failed = results.filter(r => r.type === MATCH_TYPE.ERROR).length;
+  if (failed > 0) {
+    throw new Error(`${failed} song search(es) failed, so the playlist was not changed; try again later`);
+  }
+}
+
+/**
  * Create a playlist in the signed-in user's account and add matched tracks in order
  * @param {Object} deps - { spotifyClient, logger }
  * @param {string} userAccessToken - token from SpotifyAuth
@@ -178,6 +200,7 @@ function validatePerformer(performer) {
  * @returns {Promise<Object>} the created playlist with tracksAdded
  */
 export async function createPlaylistFromMatches({ spotifyClient, logger }, userAccessToken, { name, description, isPublic }, results) {
+  assertNoFailedSearches(results);
   const uris = results.filter(r => r.uri).map(r => r.uri);
   if (uris.length === 0) {
     throw new Error('No matched tracks to add to a playlist');
@@ -237,6 +260,7 @@ export async function findShowPlaylist({ spotifyClient, logger }, userAccessToke
  */
 export async function saveShowPlaylist(deps, userAccessToken, { date, performer, name, description, isPublic }, results) {
   const { spotifyClient, logger } = deps;
+  assertNoFailedSearches(results);
   const uris = results.filter(r => r.uri).map(r => r.uri);
   const existing = await findShowPlaylist(deps, userAccessToken, { date, performer });
 

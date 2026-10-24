@@ -2,6 +2,7 @@ import { describe, it, beforeEach, afterEach } from 'mocha';
 import { expect } from 'chai';
 import sinon from 'sinon';
 import { SpotifyMatcher } from '../../src/services/spotifyMatcher.js';
+import { SpotifyRateLimitError } from '../../src/services/spotifyClient.js';
 import {
   matchSongs,
   summariseMatches,
@@ -27,7 +28,7 @@ function track(id, name, albumName, releaseDate, artist = 'Mudhoney') {
 }
 
 function result(position, type, extra = {}) {
-  const matched = type !== MATCH_TYPE.NO_MATCH;
+  const matched = type !== MATCH_TYPE.NO_MATCH && type !== MATCH_TYPE.ERROR;
   return {
     position,
     song: `Song ${position}`,
@@ -38,6 +39,7 @@ function result(position, type, extra = {}) {
     releaseDate: matched ? '2018-01-01' : null,
     uri: matched ? `spotify:track:t${position}` : null,
     url: null,
+    error: null,
     ...extra
   };
 }
@@ -106,15 +108,29 @@ describe('playlistBuilder', () => {
         { name: 'Mudride' }
       ]);
 
-      expect(results.map(r => r.type)).to.deep.equal([MATCH_TYPE.NO_MATCH, MATCH_TYPE.STUDIO]);
+      expect(results.map(r => r.type)).to.deep.equal([MATCH_TYPE.ERROR, MATCH_TYPE.STUDIO]);
+      expect(results[0].error).to.equal('HTTP 500');
+      expect(results[1].error).to.be.null;
       expect(logger.error.calledOnce).to.be.true;
+    });
+
+    it('should stop matching at a Spotify rate limit', async () => {
+      spotifyClient.searchTracks.onFirstCall().rejects(new SpotifyRateLimitError(66214));
+
+      try {
+        await matchSongs({ spotifyClient, matcher, logger }, 'Mudhoney', [{ name: 'A' }, { name: 'B' }]);
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).to.be.instanceOf(SpotifyRateLimitError);
+        expect(spotifyClient.searchTracks.calledOnce).to.be.true;
+      }
     });
   });
 
   describe('summariseMatches', () => {
     it('should count live, studio and unmatched', () => {
       const results = [result(1, MATCH_TYPE.LIVE), result(2, MATCH_TYPE.STUDIO), result(3, MATCH_TYPE.LIVE), result(4, MATCH_TYPE.NO_MATCH)];
-      expect(summariseMatches(results)).to.deep.equal({ total: 4, live: 2, studio: 1, unmatched: 1 });
+      expect(summariseMatches(results)).to.deep.equal({ total: 4, live: 2, studio: 1, unmatched: 1, failed: 0 });
     });
   });
 
@@ -130,6 +146,12 @@ describe('playlistBuilder', () => {
       expect(lines[2]).to.match(/^ 1\s+If I Think\s+LIVE\s+Song 1\s+LiE \(Live in Europe\)\s+2018$/);
       expect(lines[3]).to.match(/^ 2\s+Unknown Song\s+NO MATCH$/);
       expect(table).to.include('2 songs: 1 live, 0 studio, 1 not matched');
+    });
+
+    it('should count failed searches separately', () => {
+      const table = formatMatchTable([result(1, MATCH_TYPE.LIVE), result(2, MATCH_TYPE.ERROR, { error: 'HTTP 500' })]);
+      expect(table).to.match(/ 2\s+Song 2\s+ERROR/);
+      expect(table).to.include('2 songs: 1 live, 0 studio, 0 not matched, 1 search failed');
     });
 
     it('should shorten long values to keep columns aligned', () => {
@@ -229,6 +251,17 @@ describe('playlistBuilder', () => {
       expect(spotifyClient.createPlaylist.calledOnceWith('user-token', 'My list', { isPublic: false, description: 'desc' })).to.be.true;
       expect(spotifyClient.addTracksToPlaylist.calledOnceWith('user-token', 'p1', ['spotify:track:t1', 'spotify:track:t3'])).to.be.true;
       expect(playlist).to.include({ id: 'p1', externalUrl: 'https://open.spotify.com/playlist/p1', tracksAdded: 2 });
+    });
+
+    it('should not create a playlist when any song search failed', async () => {
+      try {
+        await createPlaylistFromMatches({ spotifyClient, logger }, 'user-token', { name: 'N' },
+          [result(1, MATCH_TYPE.LIVE), result(2, MATCH_TYPE.ERROR, { error: 'HTTP 500' })]);
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err.message).to.include('1 song search(es) failed');
+        expect(spotifyClient.createPlaylist.called).to.be.false;
+      }
     });
 
     it('should not create an empty playlist', async () => {
@@ -367,6 +400,21 @@ describe('playlistBuilder', () => {
         const saved = await saveShowPlaylist({ spotifyClient, logger }, 'user-token', withApostrophe, matches);
 
         expect(saved.action).to.equal('unchanged');
+      });
+
+      it('should leave an existing playlist untouched when any song search failed', async () => {
+        spotifyClient.listMyPlaylists.resolves([owned('p1', details.name, { description: details.description })]);
+
+        try {
+          await saveShowPlaylist({ spotifyClient, logger }, 'user-token', details,
+            [result(1, MATCH_TYPE.LIVE), result(2, MATCH_TYPE.ERROR, { error: 'HTTP 500' })]);
+          expect.fail('Should have thrown an error');
+        } catch (err) {
+          expect(err.message).to.include('playlist was not changed');
+          expect(spotifyClient.listMyPlaylists.called).to.be.false;
+          expect(spotifyClient.replacePlaylistTracks.called).to.be.false;
+          expect(spotifyClient.updatePlaylistDetails.called).to.be.false;
+        }
       });
 
       it('should change visibility only when asked', async () => {

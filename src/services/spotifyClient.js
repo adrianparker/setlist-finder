@@ -5,6 +5,30 @@ import { cleanSearchTerm } from './songName.js';
 const SEARCH_PAGE_SIZE = 10;
 const SEARCH_MAX_PAGES = 2;
 
+// Short rate-limit waits are retried; Development Mode can also impose waits of many hours,
+// and carrying on with requests then only earns more refusals, so those stop at once
+const MAX_RATE_LIMIT_WAIT_SECONDS = 10;
+const MAX_RATE_LIMIT_RETRIES = 2;
+
+function describeWait(seconds) {
+  if (seconds >= 2 * 3600) return `about ${Math.round(seconds / 3600)} hours`;
+  if (seconds >= 120) return `about ${Math.round(seconds / 60)} minutes`;
+  return `${seconds} seconds`;
+}
+
+/**
+ * Spotify refused a request with HTTP 429 and asked for a wait too long to sit through
+ */
+export class SpotifyRateLimitError extends Error {
+  constructor(retryAfterSeconds) {
+    const after = new Date(Date.now() + retryAfterSeconds * 1000);
+    const when = after.toLocaleString('en-AU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    super(`Spotify rate limit reached; try again in ${describeWait(retryAfterSeconds)} (after ${when})`);
+    this.name = 'SpotifyRateLimitError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 export class SpotifyClient {
   constructor(logger) {
     this.logger = logger;
@@ -18,6 +42,31 @@ export class SpotifyClient {
     }
   }
 
+  sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * fetch() with Spotify rate-limit handling: short Retry-After waits are retried,
+   * long ones throw SpotifyRateLimitError straight away
+   * @private
+   */
+  async spotifyFetch(url, options) {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url, options);
+      if (response.status !== 429) {
+        return response;
+      }
+
+      const retryAfterSeconds = Number(response.headers?.get?.('retry-after')) || 1;
+      if (retryAfterSeconds > MAX_RATE_LIMIT_WAIT_SECONDS || attempt >= MAX_RATE_LIMIT_RETRIES) {
+        throw new SpotifyRateLimitError(retryAfterSeconds);
+      }
+      this.logger.warn(`Spotify rate limit: waiting ${retryAfterSeconds}s before retrying`);
+      await this.sleep(retryAfterSeconds * 1000);
+    }
+  }
+
   async getAccessToken() {
     // Return cached token if still valid
     if (this.accessToken && this.tokenExpiry && Date.now() < this.tokenExpiry) {
@@ -28,7 +77,7 @@ export class SpotifyClient {
       this.logger.debug('Requesting Spotify access token');
       const auth = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
       
-      const response = await fetch('https://accounts.spotify.com/api/token', {
+      const response = await this.spotifyFetch('https://accounts.spotify.com/api/token', {
         method: 'POST',
         headers: {
           'Authorization': `Basic ${auth}`,
@@ -58,6 +107,7 @@ export class SpotifyClient {
    * Search Spotify for an artist's song. Runs the field-filtered search plus a second
    * "<song> live" search, so live versions are not crowded out by the 10-result limit,
    * fetches a further page when a page is full, and merges the results without duplicates.
+   * Throws when a search fails (SpotifyRateLimitError for a long rate limit).
    */
   async searchTracks(artistName, songName) {
     try {
@@ -76,6 +126,7 @@ export class SpotifyClient {
       try {
         tracks.push(...await this.searchTrackPages(token, `${query} live`));
       } catch (err) {
+        if (err instanceof SpotifyRateLimitError) throw err;
         this.logger.warn(`Spotify live search failed for "${artistName} - ${songName}": ${err.message}`);
       }
 
@@ -98,8 +149,9 @@ export class SpotifyClient {
           }
         }));
     } catch (err) {
+      // Pass errors on, so a failed search is never mistaken for a song with no match
       this.logger.error(`Spotify search failed for "${artistName} - ${songName}": ${err.message}`);
-      return [];
+      throw err;
     }
   }
 
@@ -114,7 +166,7 @@ export class SpotifyClient {
       const url = `https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=${SEARCH_PAGE_SIZE}&offset=${offset}`;
       this.logger.debug(`Spotify search: "${query}" offset ${offset}`);
 
-      const response = await fetch(url, {
+      const response = await this.spotifyFetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
@@ -148,7 +200,7 @@ export class SpotifyClient {
 
       this.logger.debug(`Creating Spotify playlist: "${playlistName}" (public: ${isPublic})`);
 
-      const response = await fetch(url, {
+      const response = await this.spotifyFetch(url, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${userAccessToken}`,
@@ -198,7 +250,7 @@ export class SpotifyClient {
       options.body = JSON.stringify(body);
     }
 
-    const response = await fetch(url, options);
+    const response = await this.spotifyFetch(url, options);
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const errorMessage = errorData.error?.message || response.statusText;
@@ -321,7 +373,7 @@ export class SpotifyClient {
 
         this.logger.debug(`Adding batch ${batchIndex + 1}/${batches.length} (${batch.length} tracks)`);
 
-        const response = await fetch(url, {
+        const response = await this.spotifyFetch(url, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${userAccessToken}`,

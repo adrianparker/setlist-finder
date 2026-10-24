@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'mocha';
 import { expect } from 'chai';
 import sinon from 'sinon';
-import { SpotifyClient } from '../../src/services/spotifyClient.js';
+import { SpotifyClient, SpotifyRateLimitError } from '../../src/services/spotifyClient.js';
 
 describe('SpotifyClient', () => {
   let client;
@@ -228,19 +228,16 @@ describe('SpotifyClient', () => {
       });
     });
 
-    it('should handle search errors gracefully', async () => {
-      const mockSearchResponse = {
-        ok: false,
-        statusText: 'Not Found'
-      };
+    it('should log and pass on search errors so callers can tell them from no match', async () => {
+      fetchStub.resolves({ ok: false, status: 500, statusText: 'Server Error' });
 
-      fetchStub.resolves(mockSearchResponse);
-
-      const results = await client.searchTracks('Test Artist', 'Test Song');
-
-      expect(results).to.be.an('array');
-      expect(results).to.have.lengthOf(0);
-      expect(logger.error.called).to.be.true;
+      try {
+        await client.searchTracks('Test Artist', 'Test Song');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err.message).to.include('HTTP 500');
+        expect(logger.error.called).to.be.true;
+      }
     });
   });
 
@@ -321,6 +318,72 @@ describe('SpotifyClient', () => {
         expect.fail('Should have thrown an error');
       } catch (err) {
         expect(err.message).to.include('User access token and playlist name are required');
+      }
+    });
+  });
+
+  describe('rate limits', () => {
+    const limited = retryAfter => ({
+      ok: false,
+      status: 429,
+      statusText: 'Too Many Requests',
+      headers: { get: name => (name.toLowerCase() === 'retry-after' ? String(retryAfter) : null) },
+      json: sinon.stub().resolves({})
+    });
+    const page = { ok: true, status: 200, json: sinon.stub().resolves({ tracks: { items: [] } }) };
+
+    beforeEach(() => {
+      client = new SpotifyClient(logger);
+      client.accessToken = 'cached-token';
+      client.tokenExpiry = Date.now() + 100000;
+      client.sleep = sinon.stub().resolves();
+    });
+
+    it('should wait and retry a short rate limit', async () => {
+      fetchStub.onCall(0).resolves(limited(2));
+      fetchStub.resolves(page);
+
+      await client.searchTracks('Test Artist', 'Test Song');
+
+      expect(client.sleep.calledOnceWith(2000)).to.be.true;
+      expect(logger.warn.calledWithMatch('rate limit')).to.be.true;
+    });
+
+    it('should stop at once on a long rate limit, saying when to try again', async () => {
+      fetchStub.resolves(limited(66214));
+
+      try {
+        await client.searchTracks('Test Artist', 'Test Song');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).to.be.instanceOf(SpotifyRateLimitError);
+        expect(err.retryAfterSeconds).to.equal(66214);
+        expect(err.message).to.match(/try again in about 18 hours/);
+        expect(client.sleep.called).to.be.false;
+        expect(fetchStub.callCount).to.equal(1);
+      }
+    });
+
+    it('should stop when the live search hits the rate limit too', async () => {
+      fetchStub.onCall(0).resolves(page);
+      fetchStub.onCall(1).resolves(limited(600));
+
+      try {
+        await client.searchTracks('Test Artist', 'Test Song');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).to.be.instanceOf(SpotifyRateLimitError);
+      }
+    });
+
+    it('should apply to user requests as well', async () => {
+      fetchStub.resolves(limited(600));
+
+      try {
+        await client.listMyPlaylists('user-token');
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err).to.be.instanceOf(SpotifyRateLimitError);
       }
     });
   });

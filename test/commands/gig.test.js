@@ -3,6 +3,7 @@ import { expect } from 'chai';
 import sinon from 'sinon';
 import { gig } from '../../src/commands/gig.js';
 import { SpotifyMatcher } from '../../src/services/spotifyMatcher.js';
+import { SpotifyRateLimitError } from '../../src/services/spotifyClient.js';
 
 function setlist(id, eventDate, mainSongs, encoreSongs = []) {
   const set = [{ song: mainSongs.map(name => ({ name })) }];
@@ -263,6 +264,19 @@ describe('gig command (actual setlist)', () => {
     const table = deps.output.firstCall.args[0];
     expect(table).to.match(/ 1\s+Get Into Yours\s+LIVE/);
     expect(table).to.match(/ 3\s+Mudride\s+LIVE.*encore$/m);
+  });
+
+  it('should stop without touching the playlist when Spotify rate-limits the searches', async () => {
+    deps.spotifyClient.searchTracks = sinon.stub().rejects(new SpotifyRateLimitError(66214));
+
+    const outcome = await gig({ performer: 'Mudhoney', date: '20261022' }, deps);
+
+    expect(outcome).to.be.null;
+    expect(deps.logger.error.calledWithMatch('try again in about 18 hours')).to.be.true;
+    expect(deps.spotifyClient.listMyPlaylists.called).to.be.false;
+    expect(deps.spotifyClient.updatePlaylistDetails.called).to.be.false;
+    expect(deps.spotifyClient.replacePlaylistTracks.called).to.be.false;
+    expect(process.exitCode).to.equal(1);
   });
 
   it('should create the actual-setlist playlist when there is none', async () => {
