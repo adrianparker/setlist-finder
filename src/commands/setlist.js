@@ -3,6 +3,11 @@ import { SetlistFmClient } from '../services/setlistFmClient.js';
 import { SpotifyClient } from '../services/spotifyClient.js';
 import { SpotifyMatcher } from '../services/spotifyMatcher.js';
 import { parseSetlistSongs } from '../services/setlistParser.js';
+import {
+  buildPlaylistTitle,
+  buildPlaylistDescription,
+  setlistDateToPerformanceDate
+} from '../services/playlistBuilder.js';
 import { Logger } from '../services/logger.js';
 import readline from 'readline';
 
@@ -107,8 +112,8 @@ export async function setlist() {
         const setlistResponse = await setlistClient.getSetlist(matchingSetlists[0]);
 
         if (setlistResponse) {
-          const playlistName = displaySetlist(setlistResponse);
-          await findSpotifySongs(setlistResponse, playlistName, rl);
+          displaySetlist(setlistResponse);
+          await findSpotifySongs(setlistResponse, rl);
         } else {
           logger.info(`No setlist content for ID: ${matchingSetlists}`);
         }
@@ -138,13 +143,13 @@ function displaySetlist(setlistResponse) {
   const eventDate = setlistResponse.eventDate || 'Unknown Date';
   const setlistId = setlistResponse.id || 'Unknown ID';
   const url = setlistResponse.url || '';
-  const playlistName = `${artistName} @ ${venueName}, ${cityName} ${countryName} on ${eventDate} (ID: ${setlistId} ${url})`;
+  const summary = `${artistName} @ ${venueName}, ${cityName} ${countryName} on ${eventDate} (ID: ${setlistId} ${url})`;
 
-  logger.info(playlistName);
-  return playlistName;
+  logger.info(summary);
+  return summary;
 }
 
-async function findSpotifySongs(setlistResponse, playlistName, rl) {
+async function findSpotifySongs(setlistResponse, rl) {
   if (!spotifyClient) {
     logger.warn('Spotify client not available, skipping song matching');
     return;
@@ -223,7 +228,9 @@ async function findSpotifySongs(setlistResponse, playlistName, rl) {
         const spotifyAccessToken = await prompt(rl, 'Paste your Spotify access token (or press Enter to skip): ');
         
         if (spotifyAccessToken) {
-          await createSpotifyPlaylist(playlistName, playlistData, spotifyAccessToken);
+          const performer = setlistResponse.artist?.name;
+          const playlistName = buildPlaylistTitle(setlistDateToPerformanceDate(setlistResponse.eventDate), performer);
+          await createSpotifyPlaylist(playlistName, buildPlaylistDescription(performer), playlistData, spotifyAccessToken);
         } else {
           logger.info('Skipping playlist creation');
         }
@@ -238,12 +245,12 @@ async function findSpotifySongs(setlistResponse, playlistName, rl) {
   }
 }
 
-async function createSpotifyPlaylist(playlistName, playlistData, spotifyAccessToken) {
+async function createSpotifyPlaylist(playlistName, description, playlistData, spotifyAccessToken) {
   try {
     logger.info(`Creating Spotify playlist: "${playlistName}"`);
 
     // Create the playlist using the user's access token
-    const playlistResponse = await spotifyClient.createPlaylist(spotifyAccessToken, playlistName, { isPublic: true });
+    const playlistResponse = await spotifyClient.createPlaylist(spotifyAccessToken, playlistName, { isPublic: true, description });
 
     if (!playlistResponse || !playlistResponse.id) {
       logger.error('Failed to create playlist: invalid response');
