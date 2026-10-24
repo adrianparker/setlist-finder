@@ -333,6 +333,37 @@ describe('SpotifyAuth', () => {
       expect(await again).to.equal('c');
     });
 
+    it('should start the paste prompt only after the browser has been opened', async () => {
+      const order = [];
+      auth.openBrowser = () => order.push('browser');
+      auth.readPastedUrl = () => { order.push('paste'); return new Promise(() => {}); };
+      sinon.stub(auth, 'waitForCallback').callsFake(async (state, onListening) => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        onListening();
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return 'code-from-browser';
+      });
+      fetchStub.resolves(tokenResponse({ access_token: 'a', refresh_token: 'r', expires_in: 3600, scope: 'x' }));
+
+      await auth.login();
+
+      expect(order).to.deep.equal(['browser', 'paste']);
+    });
+
+    it('should not prompt for a paste when sign-in fails before the browser opens', async () => {
+      const readPastedUrl = sinon.stub().returns(new Promise(() => {}));
+      auth.readPastedUrl = readPastedUrl;
+      sinon.stub(auth, 'waitForCallback').rejects(new Error('Could not start sign-in callback server'));
+
+      try {
+        await auth.login();
+        expect.fail('Should have thrown an error');
+      } catch (err) {
+        expect(err.message).to.include('Could not start');
+        expect(readPastedUrl.called).to.be.false;
+      }
+    });
+
     it('should reject a pasted address with the wrong state', async () => {
       auth.readPastedUrl = async () => 'http://127.0.0.1:18888/callback?code=abc&state=forged';
 

@@ -255,13 +255,12 @@ export class SpotifyAuth {
     if (!process.stdin.isTTY) {
       return new Promise(() => {});
     }
+    this.logger.info('If the browser shows an error page instead, copy the full address from its address bar and paste it below.');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     signal.addEventListener('abort', () => rl.close(), { once: true });
     try {
-      return await rl.question(
-        'If the browser shows an error page instead, copy the full address from its address bar and paste it here:\n',
-        { signal }
-      );
+      // A one-line prompt: readline redraws only the last line, so a multi-line prompt was printed twice
+      return await rl.question('Address: ', { signal });
     } finally {
       rl.close();
     }
@@ -277,13 +276,18 @@ export class SpotifyAuth {
     const authorizeUrl = this.buildAuthorizeUrl(generateCodeChallenge(codeVerifier), state);
     const controller = new AbortController();
 
+    let browserOpened;
+    const opened = new Promise(resolve => { browserOpened = resolve; });
+
     const fromBrowser = this.waitForCallback(state, () => {
       this.logger.info('Opening your browser to sign in to Spotify.');
       this.logger.info(`If it does not open, visit this URL: ${authorizeUrl}`);
       this.openBrowser(authorizeUrl);
+      browserOpened();
     }, controller.signal);
 
-    const fromPaste = this.readPastedUrl(controller.signal).then((pasted) => {
+    // Prompt for a pasted address only once the browser messages have been printed
+    const fromPaste = opened.then(() => this.readPastedUrl(controller.signal)).then((pasted) => {
       let url;
       try {
         url = new URL(pasted.trim());
