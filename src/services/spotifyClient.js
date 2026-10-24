@@ -94,54 +94,11 @@ export class SpotifyClient {
     }
   }
 
-  async createPlaylist(userId, playlistName, isPublic = true) {
-    try {
-      const token = await this.getAccessToken();
-
-      if (!userId || !playlistName) {
-        this.logger.warn(`Invalid playlist parameters: userId="${userId}", name="${playlistName}"`);
-        throw new Error('User ID and playlist name are required');
-      }
-
-      const url = `https://api.spotify.com/v1/users/${encodeURIComponent(userId)}/playlists`;
-      
-      this.logger.debug(`Creating Spotify playlist: "${playlistName}" for user ${userId}`);
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          name: playlistName,
-          public: isPublic,
-          description: `Setlist playlist created by setlist-finder`
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const errorMessage = errorData.error?.message || response.statusText;
-        throw new Error(`HTTP ${response.status}: ${errorMessage}`);
-      }
-
-      const data = await response.json();
-      this.logger.info(`Playlist created: "${playlistName}" (ID: ${data.id})`);
-
-      return {
-        id: data.id,
-        uri: data.uri,
-        externalUrl: data.external_urls?.spotify || '',
-        name: data.name
-      };
-    } catch (err) {
-      this.logger.error(`Failed to create Spotify playlist: ${err.message}`);
-      throw err;
-    }
-  }
-
-  async createPlaylistAsUser(userAccessToken, playlistName, isPublic = true) {
+  /**
+   * Create a playlist in the signed-in user's account (POST /me/playlists).
+   * Requires a user access token from SpotifyAuth; client-credentials tokens cannot create playlists.
+   */
+  async createPlaylist(userAccessToken, playlistName, { isPublic = false, description = 'Setlist playlist created by setlist-finder' } = {}) {
     try {
       if (!userAccessToken || !playlistName) {
         this.logger.warn(`Invalid parameters: token="${!!userAccessToken}", name="${playlistName}"`);
@@ -149,8 +106,8 @@ export class SpotifyClient {
       }
 
       const url = 'https://api.spotify.com/v1/me/playlists';
-      
-      this.logger.debug(`Creating Spotify playlist as user: "${playlistName}"`);
+
+      this.logger.debug(`Creating Spotify playlist: "${playlistName}" (public: ${isPublic})`);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -161,7 +118,7 @@ export class SpotifyClient {
         body: JSON.stringify({
           name: playlistName,
           public: isPublic,
-          description: `Setlist playlist created by setlist-finder`
+          description
         })
       });
 
@@ -177,18 +134,24 @@ export class SpotifyClient {
       return {
         id: data.id,
         uri: data.uri,
-        externalUrl: data.external_urls?.spotify || '',
+        externalUrl: data.external_urls?.spotify || `https://open.spotify.com/playlist/${data.id}`,
         name: data.name
       };
     } catch (err) {
-      this.logger.error(`Failed to create Spotify playlist as user: ${err.message}`);
+      this.logger.error(`Failed to create Spotify playlist: ${err.message}`);
       throw err;
     }
   }
 
-  async addTracksToPlaylist(playlistId, trackUris) {
+  /**
+   * Append tracks to a playlist in order (POST /playlists/{id}/items), 100 per request.
+   * Requires a user access token from SpotifyAuth.
+   */
+  async addTracksToPlaylist(userAccessToken, playlistId, trackUris) {
     try {
-      const token = await this.getAccessToken();
+      if (!userAccessToken) {
+        throw new Error('User access token is required');
+      }
 
       if (!playlistId) {
         this.logger.warn(`Invalid playlist ID: "${playlistId}"`);
@@ -210,17 +173,17 @@ export class SpotifyClient {
         batches.push(trackUris.slice(i, i + batchSize));
       }
 
-      const addedTracks = [];
+      let snapshotId = null;
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
-        const url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/tracks`;
+        const url = `https://api.spotify.com/v1/playlists/${encodeURIComponent(playlistId)}/items`;
 
         this.logger.debug(`Adding batch ${batchIndex + 1}/${batches.length} (${batch.length} tracks)`);
 
         const response = await fetch(url, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            'Authorization': `Bearer ${userAccessToken}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -235,14 +198,15 @@ export class SpotifyClient {
         }
 
         const data = await response.json();
-        addedTracks.push(...(data.snapshot_id || []));
+        snapshotId = data.snapshot_id || snapshotId;
       }
 
       this.logger.info(`Successfully added ${trackUris.length} track(s) to playlist`);
 
       return {
         tracksAdded: trackUris.length,
-        batches: batches.length
+        batches: batches.length,
+        snapshotId
       };
     } catch (err) {
       this.logger.error(`Failed to add tracks to playlist: ${err.message}`);

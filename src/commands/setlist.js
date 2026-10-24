@@ -243,7 +243,7 @@ async function createSpotifyPlaylist(playlistName, playlistData, spotifyAccessTo
     logger.info(`Creating Spotify playlist: "${playlistName}"`);
 
     // Create the playlist using the user's access token
-    const playlistResponse = await spotifyClient.createPlaylistAsUser(spotifyAccessToken, playlistName, true);
+    const playlistResponse = await spotifyClient.createPlaylist(spotifyAccessToken, playlistName, { isPublic: true });
 
     if (!playlistResponse || !playlistResponse.id) {
       logger.error('Failed to create playlist: invalid response');
@@ -254,7 +254,7 @@ async function createSpotifyPlaylist(playlistName, playlistData, spotifyAccessTo
     const trackUris = playlistData.map(entry => entry.spotifyUri);
 
     // Add tracks to the playlist
-    await spotifyClient.addTracksToPlaylist(playlistResponse.id, trackUris);
+    await spotifyClient.addTracksToPlaylist(spotifyAccessToken, playlistResponse.id, trackUris);
 
     // Log success with playlist URL
     const playlistUrl = `https://open.spotify.com/playlist/${playlistResponse.id}`;
